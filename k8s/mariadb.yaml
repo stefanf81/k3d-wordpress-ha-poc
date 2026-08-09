@@ -1,0 +1,151 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wordpress-db
+  namespace: wordpress-poc
+type: Opaque
+stringData:
+  database: wordpress
+  username: wordpress
+  password: wordpress-poc-password
+  root-password: wordpress-poc-root-password
+  admin-password: admin-poc-change-me
+
+  # Test-only static WordPress salts. They live in a Secret (rather than a
+  # ConfigMap) and k3s datastore encryption is enabled for this lab.
+  auth-key: poc-auth-key-change-me-01
+  secure-auth-key: poc-secure-auth-key-change-me-02
+  logged-in-key: poc-logged-in-key-change-me-03
+  nonce-key: poc-nonce-key-change-me-04
+  auth-salt: poc-auth-salt-change-me-05
+  secure-auth-salt: poc-secure-auth-salt-change-me-06
+  logged-in-salt: poc-logged-in-salt-change-me-07
+  nonce-salt: poc-nonce-salt-change-me-08
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+  namespace: wordpress-poc
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      serviceAccountName: mariadb-runtime
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        workload: infra
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mariadb
+          image: mariadb:12.3.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MARIADB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-db
+                  key: database
+            - name: MARIADB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-db
+                  key: username
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-db
+                  key: password
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-db
+                  key: root-password
+            - name: MARIADB_AUTO_UPGRADE
+              value: "1"
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >
+                  mariadb
+                  --protocol=tcp
+                  --host=127.0.0.1
+                  --user="$MARIADB_USER"
+                  --password="$MARIADB_PASSWORD"
+                  "$MARIADB_DATABASE"
+                  --execute='SELECT 1'
+                  >/dev/null
+            periodSeconds: 3
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >
+                  mariadb
+                  --protocol=tcp
+                  --host=127.0.0.1
+                  --user="$MARIADB_USER"
+                  --password="$MARIADB_PASSWORD"
+                  "$MARIADB_DATABASE"
+                  --execute='SELECT 1'
+                  >/dev/null
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - test -S /run/mysqld/mysqld.sock && kill -0 1
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mariadb-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: wordpress-poc
+spec:
+  type: ClusterIP
+  selector:
+    app: mariadb
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql

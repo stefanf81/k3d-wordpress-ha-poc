@@ -1,0 +1,301 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wordpress-config
+  namespace: wordpress-poc
+data:
+  wp-config.php: "<?php\ndefine('DB_NAME', getenv('WORDPRESS_DB_NAME'));\ndefine('DB_USER', getenv('WORDPRESS_DB_USER'));\n\
+    define('DB_PASSWORD', getenv('WORDPRESS_DB_PASSWORD'));\ndefine('DB_HOST', getenv('WORDPRESS_DB_HOST'));\ndefine('DB_CHARSET',\
+    \ 'utf8mb4');\ndefine('DB_COLLATE', '');\n\n// All web replicas must share the same auth keys. Values are provided from\n\
+    // the Kubernetes Secret rather than being committed in this ConfigMap.\ndefine('AUTH_KEY',         getenv('WORDPRESS_AUTH_KEY'));\n\
+    define('SECURE_AUTH_KEY',  getenv('WORDPRESS_SECURE_AUTH_KEY'));\ndefine('LOGGED_IN_KEY',    getenv('WORDPRESS_LOGGED_IN_KEY'));\n\
+    define('NONCE_KEY',        getenv('WORDPRESS_NONCE_KEY'));\ndefine('AUTH_SALT',        getenv('WORDPRESS_AUTH_SALT'));\n\
+    define('SECURE_AUTH_SALT', getenv('WORDPRESS_SECURE_AUTH_SALT'));\ndefine('LOGGED_IN_SALT',   getenv('WORDPRESS_LOGGED_IN_SALT'));\n\
+    define('NONCE_SALT',       getenv('WORDPRESS_NONCE_SALT'));\n\n$table_prefix = 'wp_';\n\ndefine('WP_ENVIRONMENT_TYPE',\
+    \ 'local');\ndefine('WP_DEBUG', true);\n// Keep the debug file outside the web root in this local lab.\ndefine('WP_DEBUG_LOG',\
+    \ '/tmp/wp-debug.log');\ndefine('WP_DEBUG_DISPLAY', false);\n\ndefine('WP_MEMORY_LIMIT', '128M');\ndefine('WP_MAX_MEMORY_LIMIT',\
+    \ '256M');\n\n// Reduce browser/admin code-execution paths. Plugins remain managed by\n// the explicit WP-CLI bootstrap\
+    \ Job.\ndefine('DISALLOW_FILE_EDIT', true);\n\n// One central WP-CLI Job owns core/plugin reconciliation. Prevent three\n\
+    // web replicas from independently performing background updates.\ndefine('WP_AUTO_UPDATE_CORE', false);\ndefine('AUTOMATIC_UPDATER_DISABLED',\
+    \ true);\n\n// Multiple web replicas can otherwise all trigger wp-cron.\n// A Kubernetes CronJob below triggers it centrally.\n\
+    define('DISABLE_WP_CRON', true);\n\nif (\n    isset($_SERVER['HTTP_X_FORWARDED_PROTO']) &&\n    strpos($_SERVER['HTTP_X_FORWARDED_PROTO'],\
+    \ 'https') !== false\n) {\n    $_SERVER['HTTPS'] = 'on';\n}\n\nif (!defined('ABSPATH')) {\n    define('ABSPATH', __DIR__\
+    \ . '/');\n}\n\nrequire_once ABSPATH . 'wp-settings.php';\n"
+  healthz.php: "<?php\nheader('Content-Type: text/plain');\n\n$host = getenv('WORDPRESS_DB_HOST') ?: 'mariadb:3306';\n$port\
+    \ = 3306;\n\nif (strpos($host, ':') !== false) {\n    [$host, $port] = explode(':', $host, 2);\n    $port = (int) $port;\n\
+    }\n\nmysqli_report(MYSQLI_REPORT_OFF);\n\n$db = @new mysqli(\n    $host,\n    getenv('WORDPRESS_DB_USER'),\n    getenv('WORDPRESS_DB_PASSWORD'),\n\
+    \    getenv('WORDPRESS_DB_NAME'),\n    $port\n);\n\nif ($db->connect_errno) {\n    http_response_code(503);\n    echo\
+    \ \"database unavailable\\n\";\n    exit;\n}\n\n$result = @$db->query(\"SELECT 1 FROM wp_options LIMIT 1\");\n\nif (!$result)\
+    \ {\n    http_response_code(503);\n    echo \"wordpress schema unavailable\\n\";\n    exit;\n}\n\nhttp_response_code(200);\n\
+    echo \"ok\\n\";\n"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  namespace: wordpress-poc
+spec:
+  replicas: 3
+  minReadySeconds: 5
+  progressDeadlineSeconds: 300
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+      serviceAccountName: wordpress-runtime
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        workload: wordpress
+        kubernetes.io/arch: arm64
+      topologySpreadConstraints:
+      - maxSkew: 1
+        minDomains: 3
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: wordpress
+      securityContext:
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: bootstrap-wordpress-files
+        image: wordpress:php8.5-apache
+        imagePullPolicy: Always
+        command:
+        - sh
+        - -ec
+        - "# Only one replica should initialize the shared WordPress tree.\nif [ ! -f /shared/wp-includes/version.php ]; then\n\
+          \  if mkdir /shared/.bootstrap-lock 2>/dev/null; then\n    trap 'rm -rf /shared/.bootstrap-lock' EXIT\n    if [\
+          \ ! -f /shared/wp-includes/version.php ]; then\n      echo \"Bootstrapping shared WordPress files...\"\n      cp\
+          \ -a /usr/src/wordpress/. /shared/\n      mkdir -p /shared/wp-content/mu-plugins\n      chown -R 33:33 /shared\n\
+          \    fi\n    rm -rf /shared/.bootstrap-lock\n    trap - EXIT\n  else\n    echo \"Another pod is bootstrapping WordPress;\
+          \ waiting...\"\n    while [ -d /shared/.bootstrap-lock ]; do\n      sleep 1\n    done\n  fi\nfi\n\ntest -f /shared/wp-includes/version.php\n\
+          mkdir -p /shared/wp-content/mu-plugins\n\n# Avoid nested ConfigMap subPath bind mounts inside the RWX\n# /var/www/html\
+          \ mount. Copy immutable config files into the same\n# shared filesystem instead.\ninstall_config() {\n  src=\"$1\"\
+          \n  dst=\"$2\"\n  tmp=\"${dst}.tmp.$$\"\n  cp \"$src\" \"$tmp\"\n  chmod 0444 \"$tmp\"\n  chown 0:0 \"$tmp\"\n \
+          \ mv -f \"$tmp\" \"$dst\"\n}\n\ninstall_config /config/wp-config.php /shared/wp-config.php\ninstall_config /config/healthz.php\
+          \ /shared/healthz.php\n"
+        volumeMounts:
+        - name: wordpress-shared
+          mountPath: /shared
+        - name: wordpress-config
+          mountPath: /config
+          readOnly: true
+      containers:
+      - name: wordpress
+        image: wordpress:php8.5-apache
+        imagePullPolicy: Always
+        command:
+        - /bin/sh
+        - -ec
+        - 'printf ''ServerName localhost\n'' > /etc/apache2/conf-available/servername.conf
+
+          a2enconf servername >/dev/null
+
+          exec apache2-foreground
+
+          '
+        ports:
+        - name: http
+          containerPort: 80
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: mariadb:3306
+        - name: WORDPRESS_DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: database
+        - name: WORDPRESS_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: username
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: password
+        - name: WORDPRESS_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: auth-key
+        - name: WORDPRESS_SECURE_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: secure-auth-key
+        - name: WORDPRESS_LOGGED_IN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: logged-in-key
+        - name: WORDPRESS_NONCE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: nonce-key
+        - name: WORDPRESS_AUTH_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: auth-salt
+        - name: WORDPRESS_SECURE_AUTH_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: secure-auth-salt
+        - name: WORDPRESS_LOGGED_IN_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: logged-in-salt
+        - name: WORDPRESS_NONCE_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: nonce-salt
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - sleep 5
+        startupProbe:
+          tcpSocket:
+            port: http
+          periodSeconds: 3
+          failureThreshold: 60
+        readinessProbe:
+          httpGet:
+            path: /healthz.php
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        volumeMounts:
+        - name: wordpress-shared
+          mountPath: /var/www/html
+      volumes:
+      - name: wordpress-shared
+        persistentVolumeClaim:
+          claimName: wordpress-shared
+      - name: wordpress-config
+        configMap:
+          name: wordpress-config
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: wordpress
+  namespace: wordpress-poc
+spec:
+  minAvailable: 2
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: wordpress
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+  namespace: wordpress-poc
+spec:
+  type: ClusterIP
+  selector:
+    app: wordpress
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wordpress
+  namespace: wordpress-poc
+spec:
+  ingressClassName: traefik
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: wordpress
+            port:
+              number: 80
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: wordpress-cron
+  namespace: wordpress-poc
+spec:
+  schedule: '*/5 * * * *'
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: wordpress-cron
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: wp-cron
+            image: curlimages/curl:8.16.0
+            resources:
+              requests:
+                cpu: 10m
+                memory: 16Mi
+              limits:
+                cpu: 100m
+                memory: 64Mi
+            command:
+            - /bin/sh
+            - -ec
+            - "echo \"Waiting for a ready WordPress Service endpoint...\"\n\nattempt=0\nmax_attempts=60\n\nuntil curl \\\n\
+              \  --fail \\\n  --silent \\\n  --show-error \\\n  --connect-timeout 2 \\\n  --max-time 5 \\\n  http://wordpress/healthz.php\
+              \ >/dev/null 2>&1\ndo\n  attempt=$((attempt + 1))\n\n  if [ \"$attempt\" -ge \"$max_attempts\" ]; then\n   \
+              \ echo \"ERROR: WordPress did not become ready within 5 minutes.\" >&2\n    exit 1\n  fi\n\n  sleep 5\ndone\n\
+              \necho \"WordPress is ready; triggering wp-cron.php...\"\n\ncurl \\\n  --fail \\\n  --silent \\\n  --show-error\
+              \ \\\n  --retry 3 \\\n  --retry-all-errors \\\n  --retry-delay 2 \\\n  --connect-timeout 5 \\\n  --max-time\
+              \ 30 \\\n  \"http://wordpress/wp-cron.php?doing_wp_cron\"\n\necho\necho \"WordPress cron trigger completed.\""
+      activeDeadlineSeconds: 420
+      backoffLimit: 1

@@ -1,0 +1,123 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wordpress-inventory
+  namespace: wordpress-poc
+  labels:
+    app: wordpress-inventory
+    app.kubernetes.io/name: wp-cli
+    app.kubernetes.io/component: inventory
+    app.kubernetes.io/part-of: wordpress-ha-poc
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: wordpress-inventory
+        app.kubernetes.io/name: wp-cli
+        app.kubernetes.io/component: inventory
+        app.kubernetes.io/part-of: wordpress-ha-poc
+    spec:
+      serviceAccountName: wordpress-inventory
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        workload: wordpress
+        kubernetes.io/arch: arm64
+      securityContext:
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: wp-cli
+        image: wordpress:cli-php8.5
+        imagePullPolicy: Always
+        workingDir: /var/www/html
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: mariadb:3306
+        - name: WORDPRESS_DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: database
+        - name: WORDPRESS_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: username
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: password
+        - name: WORDPRESS_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: auth-key
+        - name: WORDPRESS_SECURE_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: secure-auth-key
+        - name: WORDPRESS_LOGGED_IN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: logged-in-key
+        - name: WORDPRESS_NONCE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: nonce-key
+        - name: WORDPRESS_AUTH_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: auth-salt
+        - name: WORDPRESS_SECURE_AUTH_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: secure-auth-salt
+        - name: WORDPRESS_LOGGED_IN_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: logged-in-salt
+        - name: WORDPRESS_NONCE_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: nonce-salt
+        command:
+        - /bin/sh
+        - -ec
+        - "echo \"=== WordPress core ===\"\nwp core version\n\necho\necho \"=== Plugins JSON ===\"\nwp plugin list \\\n  --skip-plugins\
+          \ \\\n  --skip-themes \\\n  --fields=name,status,version,update,update_version \\\n  --format=json\n\necho\necho\
+          \ \"=== Themes JSON ===\"\nwp theme list \\\n  --skip-plugins \\\n  --skip-themes \\\n  --fields=name,status,version,update,update_version\
+          \ \\\n  --format=json\n"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+        volumeMounts:
+        - name: wordpress-shared
+          mountPath: /var/www/html
+      volumes:
+      - name: wordpress-shared
+        persistentVolumeClaim:
+          claimName: wordpress-shared

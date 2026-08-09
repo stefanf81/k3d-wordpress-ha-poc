@@ -1,0 +1,55 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+
+metadata:
+  name: wordpress-ha-poc
+
+# One Kubernetes control-plane node and three worker nodes.
+servers: 1
+agents: 3
+
+# Default is exported by start.sh. Override K3S_IMAGE to test a different
+# k3s release without editing this file.
+image: ${K3S_IMAGE}
+
+# http://localhost:8080 -> k3d load balancer -> Traefik.
+ports:
+  - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+
+# WordPress content remains a host bind because all three k3d workers need
+# to see the exact same local directory. MariaDB uses a Docker named volume
+# instead, so its datadir lives on Docker Desktop's Linux filesystem rather
+# than the macOS host filesystem.
+volumes:
+  - volume: ${WORDPRESS_SHARED_DIR}:/var/lib/wordpress-shared
+    nodeFilters:
+      - agent:*
+  - volume: ${MARIADB_DATA_VOLUME}:/var/lib/mariadb-data
+    nodeFilters:
+      - server:0
+
+options:
+  k3d:
+    wait: true
+    timeout: "180s"
+
+  k3s:
+    # Encrypt Kubernetes Secret values at rest inside the local k3s datastore.
+    extraArgs:
+      - arg: --secrets-encryption
+        nodeFilters:
+          - server:*
+
+    nodeLabels:
+      - label: workload=wordpress
+        nodeFilters:
+          - agent:*
+      - label: workload=infra
+        nodeFilters:
+          - server:*
+
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true

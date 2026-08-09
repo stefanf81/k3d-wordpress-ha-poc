@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wordpress-runtime
+  namespace: wordpress-poc
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mariadb-runtime
+  namespace: wordpress-poc
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wordpress-bootstrap
+  namespace: wordpress-poc
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wordpress-cron
+  namespace: wordpress-poc
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wordpress-inventory
+  namespace: wordpress-poc
+automountServiceAccountToken: false
+---
+# Namespace ingress is deny-by-default. Egress is deliberately unrestricted:
+# bootstrap needs wordpress.org/plugin/theme/image endpoints and pods need DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: wordpress-poc
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Allow Traefik and same-namespace test/cron pods to reach WordPress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-wordpress-http
+  namespace: wordpress-poc
+spec:
+  podSelector:
+    matchLabels:
+      app: wordpress
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 80
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 80
+---
+# MariaDB accepts traffic only from WordPress web pods and the bootstrap Job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mariadb-from-wordpress
+  namespace: wordpress-poc
+spec:
+  podSelector:
+    matchLabels:
+      app: mariadb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wordpress
+        - podSelector:
+            matchLabels:
+              app: wordpress-bootstrap
+        - podSelector:
+            matchLabels:
+              app: wordpress-inventory
+      ports:
+        - protocol: TCP
+          port: 3306

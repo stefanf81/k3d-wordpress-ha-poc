@@ -1,0 +1,597 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wordpress-bootstrap
+  namespace: wordpress-poc
+data:
+  SITE_URL: http://localhost:8080
+  SITE_TITLE: Northstar Digital
+  ADMIN_USER: admin
+  ADMIN_EMAIL: admin@example.test
+  TIMEZONE: Europe/Brussels
+  WORDPRESS_CORE_VERSION: latest
+  plugins.txt: 'wordfence@8.2.2
+
+    wordpress-seo@28.1
+
+    contact-form-7@6.1.6
+
+    flamingo@2.6.3
+
+    query-monitor@4.0.7
+
+    redirection@5.9.0
+
+    '
+  configure-plugins.php: "<?php\n\nif ( ! defined( 'ABSPATH' ) ) {\n\texit( 1 );\n}\n\necho \"Configuring common plugins...\\\
+    n\";\n\n/*\n * Yoast SEO\n *\n * Configure Northstar Digital as an organization and provide sensible\n * homepage/site\
+    \ metadata. Preserve any other Yoast values already present.\n */\nif ( defined( 'WPSEO_VERSION' ) || class_exists( 'WPSEO_Options'\
+    \ ) ) {\n\t$titles = get_option( 'wpseo_titles', array() );\n\n\tif ( ! is_array( $titles ) ) {\n\t\t$titles = array();\n\
+    \t}\n\n\t$titles['website_name'] = 'Northstar Digital';\n\t$titles['alternate_website_name'] = 'Northstar';\n\t$titles['company_or_person']\
+    \ = 'company';\n\t$titles['company_name'] = 'Northstar Digital';\n\t$titles['company_alternate_name'] = 'Northstar';\n\
+    \t$titles['title-home-wpseo'] = 'Northstar Digital %%sep%% Cloud, DevOps & Security Engineering';\n\t$titles['metadesc-home-wpseo']\
+    \ = 'Northstar Digital is a fictional cloud, DevOps, platform engineering and security consultancy used by this Kubernetes\
+    \ WordPress PoC.';\n\t$titles['open_graph_frontpage_title'] = 'Northstar Digital';\n\t$titles['open_graph_frontpage_desc']\
+    \ = 'Cloud, DevOps, platform engineering and security engineering for growing teams.';\n\t$titles['breadcrumbs-enable']\
+    \ = true;\n\n\tupdate_option( 'wpseo_titles', $titles );\n\n\t$seo_meta = array(\n\t\t'home' => array(\n\t\t\t'title'\
+    \ => 'Cloud, DevOps & Security Engineering | Northstar Digital',\n\t\t\t'description' => 'Northstar Digital helps teams\
+    \ build reliable cloud platforms, automate delivery and integrate security into engineering workflows.',\n\t\t),\n\t\t\
+    'services' => array(\n\t\t\t'title' => 'Cloud, DevOps & Security Services | Northstar Digital',\n\t\t\t'description' =>\
+    \ 'Cloud engineering, Kubernetes, CI/CD, DevSecOps, platform engineering, observability and reliability services.',\n\t\
+    \t),\n\t\t'case-studies' => array(\n\t\t\t'title' => 'Cloud & Platform Engineering Case Studies | Northstar Digital',\n\
+    \t\t\t'description' => 'Fictional examples of Kubernetes migrations, secure CI/CD platforms and highly available cloud\
+    \ architectures.',\n\t\t),\n\t\t'contact' => array(\n\t\t\t'title' => 'Contact Northstar Digital',\n\t\t\t'description'\
+    \ => 'Get in touch with the fictional Northstar Digital cloud, DevOps and security engineering team.',\n\t\t),\n\t);\n\
+    \n\tforeach ( $seo_meta as $slug => $values ) {\n\t\t$page = get_page_by_path( $slug, OBJECT, 'page' );\n\n\t\tif ( $page\
+    \ ) {\n\t\t\tupdate_post_meta( $page->ID, '_yoast_wpseo_title', $values['title'] );\n\t\t\tupdate_post_meta( $page->ID,\
+    \ '_yoast_wpseo_metadesc', $values['description'] );\n\t\t}\n\t}\n\n\techo \"  Yoast SEO: organization and page metadata\
+    \ configured.\\n\";\n}\n\n/*\n * Contact Form 7 + Flamingo\n *\n * Build one deterministic form. Mail is deliberately\
+    \ skipped in this local\n * PoC, but Flamingo still stores submissions in the WordPress database.\n */\nif ( class_exists(\
+    \ 'WPCF7_ContactForm' ) ) {\n\t$form = null;\n\n\t$form_posts = get_posts(\n\t\tarray(\n\t\t\t'post_type'      => 'wpcf7_contact_form',\n\
+    \t\t\t'post_status'    => 'any',\n\t\t\t'posts_per_page' => -1,\n\t\t)\n\t);\n\n\tforeach ( $form_posts as $form_post\
+    \ ) {\n\t\tif ( $form_post->post_title === 'Northstar Project Enquiry' ) {\n\t\t\t$form = WPCF7_ContactForm::get_instance(\
+    \ $form_post->ID );\n\t\t\tbreak;\n\t\t}\n\t}\n\n\tif ( ! $form ) {\n\t\t$form = WPCF7_ContactForm::get_template(\n\t\t\
+    \tarray(\n\t\t\t\t'title' => 'Northstar Project Enquiry',\n\t\t\t)\n\t\t);\n\t}\n\n\t$form_markup = <<<'FORM'\n<label>Your\
+    \ name\n[text* your-name autocomplete:name placeholder \"Jane Smith\"]</label>\n\n<label>Work email\n[email* your-email\
+    \ autocomplete:email placeholder \"jane@example.com\"]</label>\n\n<label>Company\n[text your-company autocomplete:organization\
+    \ placeholder \"Example Company\"]</label>\n\n<label>What can we help with?\n[select* your-subject \"Cloud migration\"\
+    \ \"Kubernetes platform\" \"CI/CD and DevSecOps\" \"Reliability and observability\" \"Security assessment\" \"Other\"\
+    ]</label>\n\n<label>Project details\n[textarea* your-message 8x40 placeholder \"Tell us a little about the project, current\
+    \ environment and goals.\"]</label>\n\n[acceptance privacy-consent] I understand this is a fictional local PoC and I will\
+    \ not enter real confidential information. [/acceptance]\n\n[submit \"Send project enquiry\"]\nFORM;\n\n\t$additional_settings\
+    \ = implode(\n\t\t\"\\n\",\n\t\tarray(\n\t\t\t'skip_mail: on',\n\t\t\t'flamingo_email: \"[your-email]\"',\n\t\t\t'flamingo_name:\
+    \ \"[your-name]\"',\n\t\t\t'flamingo_subject: \"[your-subject]\"',\n\t\t)\n\t);\n\n\t$form->set_properties(\n\t\tarray(\n\
+    \t\t\t'form'                => $form_markup,\n\t\t\t'additional_settings' => $additional_settings,\n\t\t)\n\t);\n\n\t\
+    $form->save();\n\n\t$contact_page = get_page_by_path( 'contact', OBJECT, 'page' );\n\n\tif ( $contact_page ) {\n\t\t$shortcode\
+    \ = html_entity_decode( $form->shortcode(), ENT_QUOTES );\n\n\t\t$contact_content = <<<CONTENT\n<!-- wp:heading {\"level\"\
+    :1} --><h1 class=\"wp-block-heading\">Contact</h1><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Tell us what you're building\
+    \ or what you want to improve. This is a fictional company used for a local WordPress Kubernetes proof of concept, so\
+    \ please use test data only.</p><!-- /wp:paragraph -->\n<!-- wp:columns --><div class=\"wp-block-columns\">\n<!-- wp:column\
+    \ --><div class=\"wp-block-column\"><!-- wp:heading {\"level\":3} --><h3 class=\"wp-block-heading\">Project enquiries</h3><!--\
+    \ /wp:heading --><!-- wp:paragraph --><p>Email: hello@example.test<br>Phone: +32 2 555 01 23<br>Office: Brussels, Belgium</p><!--\
+    \ /wp:paragraph --></div><!-- /wp:column -->\n<!-- wp:column --><div class=\"wp-block-column\"><!-- wp:heading {\"level\"\
+    :3} --><h3 class=\"wp-block-heading\">Typical projects</h3><!-- /wp:heading --><!-- wp:list --><ul class=\"wp-block-list\"\
+    ><li>Cloud migrations</li><li>Kubernetes platforms</li><li>CI/CD modernization</li><li>DevSecOps assessments</li><li>Reliability\
+    \ improvements</li></ul><!-- /wp:list --></div><!-- /wp:column -->\n</div><!-- /wp:columns -->\n<!-- wp:separator --><hr\
+    \ class=\"wp-block-separator has-alpha-channel-opacity\"/><!-- /wp:separator -->\n<!-- wp:heading {\"level\":2} --><h2\
+    \ class=\"wp-block-heading\">Start a conversation</h2><!-- /wp:heading -->\n<!-- wp:shortcode -->\n{$shortcode}\n<!--\
+    \ /wp:shortcode -->\nCONTENT;\n\n\t\twp_update_post(\n\t\t\tarray(\n\t\t\t\t'ID'           => $contact_page->ID,\n\t\t\
+    \t\t'post_content' => $contact_content,\n\t\t\t)\n\t\t);\n\t}\n\n\techo \"  Contact Form 7: Northstar Project Enquiry\
+    \ configured.\\n\";\n\n\tif ( class_exists( 'Flamingo_Inbound_Message' ) ) {\n\t\techo \"  Flamingo: submissions will\
+    \ be stored locally; email delivery is skipped.\\n\";\n\t}\n}\n\n/*\n * Query Monitor\n *\n * Its useful defaults require\
+    \ no persistent settings for this development PoC.\n */\nif ( defined( 'QM_VERSION' ) || class_exists( 'QueryMonitor'\
+    \ ) ) {\n\techo \"  Query Monitor: active with development defaults.\\n\";\n}\n\necho \"Common plugin configuration complete.\\\
+    n\";\n"
+  after-install.sh: '#!/bin/sh
+
+    set -eu
+
+
+    # Useful PoC defaults.
+
+    wp option update blog_public 0
+
+    wp option update default_comment_status closed
+
+    wp option update default_ping_status closed
+
+    '
+  seed-site.sh: "#!/bin/sh\nset -eu\n\ncd /var/www/html\n\nlog() {\n  printf '\\n==> %s\\n' \"$*\"\n}\n\npage_upsert() {\n\
+    \  slug=\"$1\"\n  title=\"$2\"\n  content_file=\"$3\"\n\n  id=\"$(wp post list \\\n    --post_type=page \\\n    --name=\"\
+    $slug\" \\\n    --field=ID \\\n    --format=ids | awk '{print $1}')\"\n\n  if [ -n \"$id\" ]; then\n    wp post update\
+    \ \"$id\" \\\n      --post_title=\"$title\" \\\n      --post_content=\"$(cat \"$content_file\")\" \\\n      --post_status=publish\
+    \ >/dev/null\n  else\n    id=\"$(wp post create \\\n      --post_type=page \\\n      --post_status=publish \\\n      --post_title=\"\
+    $title\" \\\n      --post_name=\"$slug\" \\\n      --post_content=\"$(cat \"$content_file\")\" \\\n      --porcelain)\"\
+    \n  fi\n\n  printf '%s' \"$id\"\n}\n\nterm_ensure() {\n  taxonomy=\"$1\"\n  slug=\"$2\"\n  name=\"$3\"\n\n  id=\"$(wp\
+    \ term get \"$taxonomy\" \"$slug\" \\\n      --by=slug \\\n      --field=term_id 2>/dev/null || true)\"\n\n  if [ -z \"\
+    $id\" ]; then\n    id=\"$(wp term create \"$taxonomy\" \"$name\" \\\n      --slug=\"$slug\" \\\n      --porcelain)\"\n\
+    \  fi\n\n  printf '%s' \"$id\"\n}\n\nuser_ensure() {\n  login=\"$1\"\n  email=\"$2\"\n  display=\"$3\"\n  first=\"$4\"\
+    \n  last=\"$5\"\n\n  id=\"$(wp user get \"$login\" --field=ID 2>/dev/null || true)\"\n\n  if [ -z \"$id\" ]; then\n  \
+    \  id=\"$(wp user create \"$login\" \"$email\" \\\n      --role=author \\\n      --display_name=\"$display\" \\\n    \
+    \  --user_pass='northstar-author-poc' \\\n      --porcelain)\"\n  fi\n\n  wp user update \"$id\" \\\n    --display_name=\"\
+    $display\" \\\n    --first_name=\"$first\" \\\n    --last_name=\"$last\" >/dev/null\n\n  printf '%s' \"$id\"\n}\n\npost_upsert()\
+    \ {\n  slug=\"$1\"\n  title=\"$2\"\n  author_id=\"$3\"\n  category_slug=\"$4\"\n  tags_csv=\"$5\"\n  content_file=\"$6\"\
+    \n  excerpt=\"$7\"\n\n  id=\"$(wp post list \\\n    --post_type=post \\\n    --name=\"$slug\" \\\n    --field=ID \\\n\
+    \    --format=ids | awk '{print $1}')\"\n\n  if [ -n \"$id\" ]; then\n    wp post update \"$id\" \\\n      --post_title=\"\
+    $title\" \\\n      --post_content=\"$(cat \"$content_file\")\" \\\n      --post_excerpt=\"$excerpt\" \\\n      --post_author=\"\
+    $author_id\" \\\n      --post_status=publish >/dev/null\n  else\n    id=\"$(wp post create \\\n      --post_type=post\
+    \ \\\n      --post_status=publish \\\n      --post_title=\"$title\" \\\n      --post_name=\"$slug\" \\\n      --post_content=\"\
+    $(cat \"$content_file\")\" \\\n      --post_excerpt=\"$excerpt\" \\\n      --post_author=\"$author_id\" \\\n      --porcelain)\"\
+    \n  fi\n\n  wp post term set \"$id\" category \"$category_slug\" --by=slug >/dev/null\n\n  old_ifs=\"$IFS\"\n  IFS=','\n\
+    \  # shellcheck disable=SC2086\n  set -- $tags_csv\n  IFS=\"$old_ifs\"\n\n  if [ \"$#\" -gt 0 ]; then\n    wp post term\
+    \ set \"$id\" post_tag \"$@\" --by=slug >/dev/null\n  fi\n\n  printf '%s' \"$id\"\n}\n\nfeatured_image_ensure() {\n  post_id=\"\
+    $1\"\n  seed=\"$2\"\n  title=\"$3\"\n\n  thumb=\"$(wp post meta get \"$post_id\" _thumbnail_id 2>/dev/null || true)\"\n\
+    \  if [ -n \"$thumb\" ]; then\n    return 0\n  fi\n\n  # Remote media is intentionally best-effort. The PoC still works\
+    \ if the\n  # machine is temporarily offline after images/plugins are already cached.\n  wp media import \\\n    \"https://picsum.photos/seed/${seed}/1200/675.jpg\"\
+    \ \\\n    --post_id=\"$post_id\" \\\n    --featured_image \\\n    --title=\"$title\" \\\n    --alt=\"$title\" >/dev/null\
+    \ 2>&1 || \\\n    echo \"WARNING: could not import featured image for post $post_id\"\n}\n\ncomment_seed_if_empty() {\n\
+    \  post_id=\"$1\"\n\n  count=\"$(wp comment list \\\n    --post_id=\"$post_id\" \\\n    --status=approve \\\n    --format=count)\"\
+    \n\n  if [ \"$count\" -gt 0 ]; then\n    return 0\n  fi\n\n  wp comment create \\\n    --comment_post_ID=\"$post_id\"\
+    \ \\\n    --comment_author=\"Maya Chen\" \\\n    --comment_author_email=\"maya@example.test\" \\\n    --comment_content=\"\
+    Clear explanation. The trade-offs section is especially useful for teams that need to move incrementally.\" \\\n    --comment_approved=1\
+    \ >/dev/null\n\n  wp comment create \\\n    --comment_post_ID=\"$post_id\" \\\n    --comment_author=\"Jonas Vermeer\"\
+    \ \\\n    --comment_author_email=\"jonas@example.test\" \\\n    --comment_content=\"We ran into a similar issue during\
+    \ a platform migration. Measuring the baseline first made the biggest difference.\" \\\n    --comment_approved=1 >/dev/null\n\
+    }\n\ntmpdir=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmpdir\"' EXIT\n\nlog \"Configuring fictional Northstar Digital demo site\"\
+    \n\nwp option update blogname \"Northstar Digital\" >/dev/null\nwp option update blogdescription \"Cloud, DevOps and security\
+    \ engineering for growing teams.\" >/dev/null\nwp option update blog_public 0 >/dev/null\nwp option update default_comment_status\
+    \ open >/dev/null\nwp option update default_ping_status closed >/dev/null\nwp option update posts_per_page 6 >/dev/null\n\
+    \nlog \"Installing and activating Twenty Twenty-Five\"\nif wp theme is-installed twentytwentyfive >/dev/null 2>&1; then\n\
+    \  wp theme update twentytwentyfive >/dev/null 2>&1 || true\nelse\n  wp theme install twentytwentyfive >/dev/null\nfi\n\
+    wp theme activate twentytwentyfive >/dev/null\n\nlog \"Creating realistic authors\"\nAUTHOR_ELENA=\"$(user_ensure elena.rossi\
+    \ elena.rossi@example.test \"Elena Rossi\" Elena Rossi)\"\nAUTHOR_SAMIR=\"$(user_ensure samir.patel samir.patel@example.test\
+    \ \"Samir Patel\" Samir Patel)\"\nAUTHOR_NOOR=\"$(user_ensure noor.janssens noor.janssens@example.test \"Noor Janssens\"\
+    \ Noor Janssens)\"\n\nlog \"Creating categories and tags\"\nterm_ensure category cloud-engineering \"Cloud Engineering\"\
+    \ >/dev/null\nterm_ensure category devops \"DevOps\" >/dev/null\nterm_ensure category security \"Security\" >/dev/null\n\
+    term_ensure category platform-engineering \"Platform Engineering\" >/dev/null\nterm_ensure category reliability \"Reliability\"\
+    \ >/dev/null\n\nfor item in \\\n  \"aws:AWS\" \\\n  \"kubernetes:Kubernetes\" \\\n  \"terraform:Terraform\" \\\n  \"cicd:CI/CD\"\
+    \ \\\n  \"containers:Containers\" \\\n  \"observability:Observability\" \\\n  \"sre:SRE\" \\\n  \"devsecops:DevSecOps\"\
+    \ \\\n  \"finops:FinOps\" \\\n  \"incident-response:Incident Response\" \\\n  \"platform:Platform\" \\\n  \"automation:Automation\"\
+    \ndo\n  slug=\"${item%%:*}\"\n  name=\"${item#*:}\"\n  term_ensure post_tag \"$slug\" \"$name\" >/dev/null\ndone\n\ncat\
+    \ >\"$tmpdir/home.html\" <<'EOF'\n<!-- wp:group {\"layout\":{\"type\":\"constrained\"}} -->\n<div class=\"wp-block-group\"\
+    >\n<!-- wp:heading {\"level\":1,\"fontSize\":\"xx-large\"} -->\n<h1 class=\"wp-block-heading has-xx-large-font-size\"\
+    >Modern infrastructure. Secure by design.</h1>\n<!-- /wp:heading -->\n\n<!-- wp:paragraph {\"fontSize\":\"large\"} -->\n\
+    <p class=\"has-large-font-size\">Northstar Digital helps growing companies build reliable cloud platforms, automate delivery\
+    \ pipelines and improve application security without slowing developers down.</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:buttons\
+    \ -->\n<div class=\"wp-block-buttons\">\n<!-- wp:button --><div class=\"wp-block-button\"><a class=\"wp-block-button__link\
+    \ wp-element-button\" href=\"/services/\">Explore our services</a></div><!-- /wp:button -->\n<!-- wp:button {\"className\"\
+    :\"is-style-outline\"} --><div class=\"wp-block-button is-style-outline\"><a class=\"wp-block-button__link wp-element-button\"\
+    \ href=\"/contact/\">Talk to our team</a></div><!-- /wp:button -->\n</div>\n<!-- /wp:buttons -->\n\n<!-- wp:separator\
+    \ --><hr class=\"wp-block-separator has-alpha-channel-opacity\"/><!-- /wp:separator -->\n\n<!-- wp:heading --><h2 class=\"\
+    wp-block-heading\">What we do</h2><!-- /wp:heading -->\n\n<!-- wp:columns -->\n<div class=\"wp-block-columns\">\n<div\
+    \ class=\"wp-block-column\"><h3>Cloud Engineering</h3><p>Design and operate scalable AWS and Kubernetes platforms with\
+    \ infrastructure as code, sensible guardrails and clear ownership.</p></div>\n<div class=\"wp-block-column\"><h3>DevOps</h3><p>Automate\
+    \ builds, testing and deployment so engineering teams can ship changes safely and repeatedly.</p></div>\n<div class=\"\
+    wp-block-column\"><h3>Security</h3><p>Move security checks into everyday delivery workflows with practical DevSecOps controls\
+    \ and actionable feedback.</p></div>\n</div>\n<!-- /wp:columns -->\n\n<!-- wp:columns -->\n<div class=\"wp-block-columns\"\
+    >\n<div class=\"wp-block-column\"><h3>Platform Engineering</h3><p>Create paved roads that give developers self-service\
+    \ infrastructure without exposing unnecessary complexity.</p></div>\n<div class=\"wp-block-column\"><h3>Reliability</h3><p>Improve\
+    \ observability, incident response and service resilience using measurable SRE practices.</p></div>\n<div class=\"wp-block-column\"\
+    ><h3>Cloud Cost</h3><p>Reduce waste with right-sizing, lifecycle policies and architecture decisions that balance cost\
+    \ against reliability.</p></div>\n</div>\n<!-- /wp:columns -->\n\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Engineering\
+    \ outcomes</h2><!-- /wp:heading -->\n<!-- wp:columns -->\n<div class=\"wp-block-columns\">\n<div class=\"wp-block-column\"\
+    ><p><strong>99.95%</strong><br>average platform availability</p></div>\n<div class=\"wp-block-column\"><p><strong>40%</strong><br>faster\
+    \ deployment cycles</p></div>\n<div class=\"wp-block-column\"><p><strong>25+</strong><br>successful cloud migrations</p></div>\n\
+    <div class=\"wp-block-column\"><p><strong>24/7</strong><br>infrastructure visibility</p></div>\n</div>\n<!-- /wp:columns\
+    \ -->\n\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Recent work</h2><!-- /wp:heading -->\n<!-- wp:list -->\n<ul\
+    \ class=\"wp-block-list\">\n<li><strong>Modernising a growing SaaS platform:</strong> migrated legacy workloads into a\
+    \ repeatable Kubernetes platform without customer downtime.</li>\n<li><strong>Building a secure CI/CD platform:</strong>\
+    \ introduced automated code, dependency, container and infrastructure security checks.</li>\n<li><strong>Scaling for seasonal\
+    \ traffic:</strong> improved autoscaling and observability while reducing idle cloud capacity.</li>\n</ul>\n<!-- /wp:list\
+    \ -->\n\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Latest insights</h2><!-- /wp:heading -->\n<!-- wp:latest-posts\
+    \ {\"postsToShow\":4,\"displayPostDate\":true} /-->\n</div>\n<!-- /wp:group -->\nEOF\n\ncat >\"$tmpdir/about.html\" <<'EOF'\n\
+    <!-- wp:heading {\"level\":1} --><h1 class=\"wp-block-heading\">About Northstar Digital</h1><!-- /wp:heading -->\n<!--\
+    \ wp:paragraph --><p>Northstar Digital is a fictional technology consultancy created for this Kubernetes WordPress lab.\
+    \ The site is deliberately populated like a real small consultancy so security scanners, caching tests, search, media\
+    \ handling and WordPress APIs have meaningful content to work with.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2\
+    \ class=\"wp-block-heading\">How we work</h2><!-- /wp:heading -->\n<!-- wp:list --><ul class=\"wp-block-list\"><li>Start\
+    \ with measurable reliability and delivery goals.</li><li>Automate repetitive platform operations.</li><li>Prefer secure\
+    \ defaults over manual review gates.</li><li>Make observability part of the application lifecycle.</li><li>Document operational\
+    \ ownership and recovery paths.</li></ul><!-- /wp:list -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Our team</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Our engineers combine cloud architecture, application delivery, Kubernetes,\
+    \ security engineering and site reliability experience. The names and biographies on this demo site are fictional.</p><!--\
+    \ /wp:paragraph -->\nEOF\n\ncat >\"$tmpdir/services.html\" <<'EOF'\n<!-- wp:heading {\"level\":1} --><h1 class=\"wp-block-heading\"\
+    >Services</h1><!-- /wp:heading -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Cloud platform engineering</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Landing zones, network architecture, Kubernetes platforms, infrastructure as\
+    \ code and workload migration with a focus on maintainability and clear operational boundaries.</p><!-- /wp:paragraph\
+    \ -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">CI/CD and developer experience</h2><!-- /wp:heading -->\n<!--\
+    \ wp:paragraph --><p>Build pipelines, deployment automation, artifact management, reusable workflows and internal platform\
+    \ capabilities designed to shorten feedback loops.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\"\
+    >DevSecOps</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Secret scanning, dependency analysis, SAST, container scanning,\
+    \ IaC policy checks, DAST and vulnerability triage integrated into delivery pipelines.</p><!-- /wp:paragraph -->\n<!--\
+    \ wp:heading --><h2 class=\"wp-block-heading\">Reliability and observability</h2><!-- /wp:heading -->\n<!-- wp:paragraph\
+    \ --><p>Service-level objectives, metrics, logs, traces, alert design, runbooks and incident response practices that help\
+    \ teams understand systems before customers report problems.</p><!-- /wp:paragraph -->\nEOF\n\ncat >\"$tmpdir/case-studies.html\"\
+    \ <<'EOF'\n<!-- wp:heading {\"level\":1} --><h1 class=\"wp-block-heading\">Case Studies</h1><!-- /wp:heading -->\n<!--\
+    \ wp:heading --><h2 class=\"wp-block-heading\">SaaS platform migration</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>A\
+    \ growing software company needed to move a manually operated application estate to Kubernetes. Northstar designed a staged\
+    \ migration using infrastructure as code, managed databases and progressive delivery. Deployment frequency increased while\
+    \ recovery procedures became repeatable.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\"\
+    >Secure software delivery</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>A product team had multiple security tools\
+    \ but little consistency. We created a reusable CI/CD security workflow covering secrets, dependencies, containers and\
+    \ infrastructure. Findings were routed to developers with severity thresholds and documented exception handling.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Seasonal scale without permanent cost</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>An online service experienced short periods of very high demand. Capacity tests,\
+    \ autoscaling policies and improved dashboards allowed the platform to absorb traffic bursts while scaling back when demand\
+    \ returned to normal.</p><!-- /wp:paragraph -->\nEOF\n\ncat >\"$tmpdir/contact.html\" <<'EOF'\n<!-- wp:heading {\"level\"\
+    :1} --><h1 class=\"wp-block-heading\">Contact</h1><!-- /wp:heading -->\n<!-- wp:paragraph --><p>This is a fictional company\
+    \ used for a local WordPress Kubernetes proof of concept. No form on this site sends real mail.</p><!-- /wp:paragraph\
+    \ -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Project enquiries</h2><!-- /wp:heading -->\n<!-- wp:paragraph\
+    \ --><p>Email: hello@example.test<br>Phone: +32 2 555 01 23<br>Office: Brussels, Belgium</p><!-- /wp:paragraph -->\n<!--\
+    \ wp:paragraph --><p>Typical engagements include cloud migrations, Kubernetes platform work, CI/CD modernization, DevSecOps\
+    \ assessments and reliability improvements.</p><!-- /wp:paragraph -->\nEOF\n\ncat >\"$tmpdir/privacy.html\" <<'EOF'\n\
+    <!-- wp:heading {\"level\":1} --><h1 class=\"wp-block-heading\">Privacy Policy</h1><!-- /wp:heading -->\n<!-- wp:paragraph\
+    \ --><p>This website is a local demonstration environment. Any names, email addresses, companies, metrics and contact\
+    \ details shown here are fictional test data.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\"\
+    >Demo data</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>The site may store test comments, administrator activity,\
+    \ plugin configuration and locally generated WordPress data in its MariaDB database and shared WordPress filesystem.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">External services</h2><!-- /wp:heading -->\n<!--\
+    \ wp:paragraph --><p>During initial provisioning the lab can download plugins, themes and placeholder images from public\
+    \ repositories. Do not place real personal or confidential data in this PoC.</p><!-- /wp:paragraph -->\nEOF\n\ncat >\"\
+    $tmpdir/insights.html\" <<'EOF'\n<!-- wp:heading {\"level\":1} --><h1 class=\"wp-block-heading\">Insights</h1><!-- /wp:heading\
+    \ -->\n<!-- wp:paragraph --><p>Practical notes on cloud engineering, Kubernetes, delivery automation, security and reliability.</p><!--\
+    \ /wp:paragraph -->\nEOF\n\nHOME_ID=\"$(page_upsert home \"Home\" \"$tmpdir/home.html\")\"\nABOUT_ID=\"$(page_upsert about\
+    \ \"About\" \"$tmpdir/about.html\")\"\nSERVICES_ID=\"$(page_upsert services \"Services\" \"$tmpdir/services.html\")\"\n\
+    CASE_ID=\"$(page_upsert case-studies \"Case Studies\" \"$tmpdir/case-studies.html\")\"\nINSIGHTS_ID=\"$(page_upsert insights\
+    \ \"Insights\" \"$tmpdir/insights.html\")\"\nCONTACT_ID=\"$(page_upsert contact \"Contact\" \"$tmpdir/contact.html\")\"\
+    \nPRIVACY_ID=\"$(page_upsert privacy-policy \"Privacy Policy\" \"$tmpdir/privacy.html\")\"\n\nwp option update show_on_front\
+    \ page >/dev/null\nwp option update page_on_front \"$HOME_ID\" >/dev/null\nwp option update page_for_posts \"$INSIGHTS_ID\"\
+    \ >/dev/null\nwp option update wp_page_for_privacy_policy \"$PRIVACY_ID\" >/dev/null\n\nlog \"Reconciling classic Primary\
+    \ menu fallback\"\n\n# wp menu list supports --fields, not --field. More importantly, avoid parsing\n# human-oriented\
+    \ command output entirely: resolve the nav_menu term ID directly\n# from WordPress' taxonomy tables, then use that stable\
+    \ ID for all operations.\ndb_prefix=\"$(wp db prefix)\"\n\nPRIMARY_MENU_ID=\"$(\n  wp db query \\\n    \"SELECT t.term_id\n\
+    \       FROM ${db_prefix}terms t\n       JOIN ${db_prefix}term_taxonomy tt\n         ON tt.term_id = t.term_id\n     \
+    \ WHERE tt.taxonomy = 'nav_menu'\n        AND t.name = 'Primary'\n      ORDER BY t.term_id\n      LIMIT 1;\" \\\n    --skip-column-names\
+    \ 2>/dev/null || true\n)\"\n\nif [ -z \"$PRIMARY_MENU_ID\" ]; then\n  echo \"Creating Primary menu...\"\n  PRIMARY_MENU_ID=\"\
+    $(wp menu create \"Primary\" --porcelain)\"\nelse\n  echo \"Reusing Primary menu (term ID: $PRIMARY_MENU_ID).\"\nfi\n\n\
+    for page_id in \"$HOME_ID\" \"$SERVICES_ID\" \"$CASE_ID\" \"$ABOUT_ID\" \"$INSIGHTS_ID\" \"$CONTACT_ID\"; do\n  # Check\
+    \ the nav_menu_item's _menu_item_object_id inside this exact menu term.\n  # This makes repeated bootstrap/reconfigure\
+    \ runs fully idempotent.\n  exists=\"$(\n    wp db query \\\n      \"SELECT COUNT(*)\n         FROM ${db_prefix}postmeta\
+    \ pm\n         JOIN ${db_prefix}term_relationships tr\n           ON tr.object_id = pm.post_id\n         JOIN ${db_prefix}term_taxonomy\
+    \ tt\n           ON tt.term_taxonomy_id = tr.term_taxonomy_id\n        WHERE pm.meta_key = '_menu_item_object_id'\n  \
+    \        AND pm.meta_value = '${page_id}'\n          AND tt.taxonomy = 'nav_menu'\n          AND tt.term_id = ${PRIMARY_MENU_ID};\"\
+    \ \\\n      --skip-column-names 2>/dev/null || echo 0\n  )\"\n\n  if [ \"$exists\" = \"0\" ]; then\n    wp menu item add-post\
+    \ \"$PRIMARY_MENU_ID\" \"$page_id\" >/dev/null\n  fi\ndone\n\nlog \"Creating realistic articles\"\n\ncreate_article_file()\
+    \ {\n  slug=\"$1\"\n  shift\n  cat >\"$tmpdir/$slug.html\"\n}\n\ncreate_article_file \"improve-cloud-security\" <<'EOF'\n\
+    <!-- wp:paragraph --><p>Cloud security improves fastest when teams focus on a few controls that apply everywhere rather\
+    \ than a long list of exceptions. Start with identity, network boundaries, software supply chain visibility and reliable\
+    \ logging.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">1. Reduce standing privilege</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Prefer short-lived roles and workload identities over long-lived access keys.\
+    \ Review privileged paths, require MFA for human access and separate deployment permissions from day-to-day read access.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">2. Treat infrastructure as code as production code</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Changes to networks, IAM policies and Kubernetes resources should be reviewed,\
+    \ scanned and reproducible. Policy checks are most useful when they explain exactly why a risky configuration was rejected.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">3. Centralise security telemetry</h2><!-- /wp:heading\
+    \ -->\n<!-- wp:paragraph --><p>Collect audit logs, workload events and identity activity in a place that survives the\
+    \ failure of the system being investigated. Alerts should point to a response path, not merely state that something unusual\
+    \ occurred.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file \"reliable-cicd-pipeline\" <<'EOF'\n<!-- wp:paragraph\
+    \ --><p>A reliable delivery pipeline is less about having many stages and more about making each stage deterministic.\
+    \ The same commit should produce the same artifact, and that artifact should progress through environments without being\
+    \ rebuilt.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Build once</h2><!-- /wp:heading\
+    \ -->\n<!-- wp:paragraph --><p>Create an immutable artifact, attach provenance and an SBOM, then promote the artifact\
+    \ rather than rebuilding source code for each environment.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"\
+    wp-block-heading\">Fail early, but keep feedback useful</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Fast checks\
+    \ such as formatting, unit tests and secret scanning belong near the beginning. Longer integration and dynamic tests can\
+    \ run after an artifact exists. Security findings need severity and ownership rules so pipelines do not become permanently\
+    \ red.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file \"when-to-use-kubernetes\" <<'EOF'\n<!-- wp:paragraph --><p>Kubernetes\
+    \ is valuable when a team needs consistent workload scheduling, service discovery, declarative rollout behaviour and a\
+    \ common operational model across many services. It is not automatically the simplest answer for every application.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Good signals</h2><!-- /wp:heading -->\n<!-- wp:list\
+    \ --><ul class=\"wp-block-list\"><li>Many independently deployed services.</li><li>Teams already operate containers at\
+    \ scale.</li><li>High availability and rollout controls are important.</li><li>A platform team can own cluster-level capabilities.</li></ul><!--\
+    \ /wp:list -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Warning signs</h2><!-- /wp:heading -->\n<!-- wp:paragraph\
+    \ --><p>If one small team owns two simple applications and has no need for platform abstraction, a managed application\
+    \ service may deliver more value with much less operational overhead.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file\
+    \ \"reduce-cloud-costs\" <<'EOF'\n<!-- wp:paragraph --><p>Cost optimisation is most sustainable when it is part of architecture\
+    \ and operations rather than an occasional cleanup exercise. Start by understanding which resources are expensive and\
+    \ which business capability they support.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\"\
+    >Measure before resizing</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>CPU alone is rarely enough. Review memory pressure,\
+    \ storage throughput, network patterns, request latency and scaling behaviour. Rightsizing without this context can simply\
+    \ trade cloud spend for instability.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Automate\
+    \ obvious waste</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Non-production schedules, lifecycle rules, stale snapshots\
+    \ and abandoned environments are good automation targets. These savings repeat every month without requiring engineers\
+    \ to remember a cleanup checklist.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file \"production-platform-migration\"\
+    \ <<'EOF'\n<!-- wp:paragraph --><p>The safest production migrations are designed around reversible steps. Instead of planning\
+    \ one large cutover, create checkpoints where traffic, data and operational responsibility can move independently.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Establish a baseline</h2><!-- /wp:heading -->\n\
+    <!-- wp:paragraph --><p>Before changing the platform, capture current latency, error rates, deployment times, recovery\
+    \ procedures and cost. Without a baseline it is difficult to prove that the migration improved anything.</p><!-- /wp:paragraph\
+    \ -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Move observability first</h2><!-- /wp:heading -->\n<!-- wp:paragraph\
+    \ --><p>Dashboards and logs should understand both old and new environments before customer traffic changes. This shortens\
+    \ troubleshooting when behaviour differs during the transition.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file\
+    \ \"why-infrastructure-as-code-matters\" <<'EOF'\n<!-- wp:paragraph --><p>Infrastructure as code turns environment configuration\
+    \ into reviewable, repeatable change. Its biggest benefit is not syntax; it is that infrastructure stops depending on\
+    \ undocumented console history.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Review becomes\
+    \ possible</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Network routes, IAM policy and service configuration can\
+    \ be discussed before they are applied. Automated checks can enforce organisational requirements consistently.</p><!--\
+    \ /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Recovery becomes less mysterious</h2><!-- /wp:heading\
+    \ -->\n<!-- wp:paragraph --><p>When infrastructure definitions, state strategy and bootstrap dependencies are understood,\
+    \ rebuilding a damaged environment becomes an engineering process instead of an archaeological exercise.</p><!-- /wp:paragraph\
+    \ -->\nEOF\n\ncreate_article_file \"container-security-guide\" <<'EOF'\n<!-- wp:paragraph --><p>Container security begins\
+    \ before the image is built. Dependencies, base images, build provenance and runtime permissions all contribute to the\
+    \ final risk profile.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Keep images intentional</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Use a small runtime base, pin important dependencies, remove build tools from\
+    \ the final stage and run as a non-root user. Scan the image, but also know which packages are actually reachable by the\
+    \ application.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Runtime still matters</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Read-only filesystems, dropped Linux capabilities, resource limits and network\
+    \ policy reduce the impact of a compromised process. Image scanning and runtime controls solve different problems.</p><!--\
+    \ /wp:paragraph -->\nEOF\n\ncreate_article_file \"kubernetes-metrics-that-matter\" <<'EOF'\n<!-- wp:paragraph --><p>A\
+    \ Kubernetes dashboard can contain hundreds of charts and still fail to answer the question operators care about: is the\
+    \ service healthy for users?</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Start from service\
+    \ behaviour</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Request rate, error rate and latency usually matter before\
+    \ pod CPU. Infrastructure metrics explain why service behaviour changed; they are not a replacement for service-level\
+    \ signals.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Watch scheduling and saturation</h2><!--\
+    \ /wp:heading -->\n<!-- wp:paragraph --><p>Pending pods, memory pressure, throttling, restart frequency and unavailable\
+    \ replicas reveal capacity or workload problems that may not yet be visible in average CPU charts.</p><!-- /wp:paragraph\
+    \ -->\nEOF\n\ncreate_article_file \"zero-downtime-deployments\" <<'EOF'\n<!-- wp:paragraph --><p>Zero-downtime deployment\
+    \ is a coordination problem between application readiness, traffic routing and compatibility. Kubernetes provides useful\
+    \ primitives, but applications still need to behave correctly during overlap.</p><!-- /wp:paragraph -->\n<!-- wp:heading\
+    \ --><h2 class=\"wp-block-heading\">Readiness controls traffic</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>A pod\
+    \ should only receive traffic when it can serve real requests. Startup probes prevent slow applications from being killed\
+    \ prematurely, while readiness probes keep unhealthy instances out of service endpoints.</p><!-- /wp:paragraph -->\n<!--\
+    \ wp:heading --><h2 class=\"wp-block-heading\">Keep database changes compatible</h2><!-- /wp:heading -->\n<!-- wp:paragraph\
+    \ --><p>During rolling updates old and new application versions can run together. Expand-and-contract database changes\
+    \ avoid forcing every replica to change at exactly the same moment.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file\
+    \ \"managed-vs-self-hosted-kubernetes\" <<'EOF'\n<!-- wp:paragraph --><p>Managed Kubernetes removes part of the control-plane\
+    \ burden, but it does not remove responsibility for workload security, networking choices, node lifecycle, observability\
+    \ or platform design.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Managed usually wins\
+    \ for production teams</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Cloud-managed offerings reduce undifferentiated\
+    \ control-plane work and integrate with identity, load balancing and storage services. This lets platform teams spend\
+    \ more time on workload experience.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Self-hosting\
+    \ still has a place</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Edge environments, disconnected systems, specialised\
+    \ infrastructure and learning labs can justify self-managed clusters. The operational cost should be treated as a real\
+    \ product requirement.</p><!-- /wp:paragraph -->\nEOF\n\ncreate_article_file \"platform-engineering-developer-experience\"\
+    \ <<'EOF'\n<!-- wp:paragraph --><p>Platform engineering works when it removes repeated decisions from product teams without\
+    \ hiding the information they need to operate their services.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"\
+    wp-block-heading\">Build paved roads, not locked rooms</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Provide supported\
+    \ templates for common workloads, sensible defaults and self-service workflows. Teams should be able to understand what\
+    \ the platform creates and how to escape the default when justified.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2\
+    \ class=\"wp-block-heading\">Measure developer friction</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Lead time, failed\
+    \ deployments, onboarding time and support requests reveal whether a platform is actually improving the engineering experience.</p><!--\
+    \ /wp:paragraph -->\nEOF\n\ncreate_article_file \"lessons-from-production-incident\" <<'EOF'\n<!-- wp:paragraph --><p>Incidents\
+    \ expose the difference between how a system is documented and how it actually behaves. The most valuable follow-up work\
+    \ reduces uncertainty for the next responder.</p><!-- /wp:paragraph -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\"\
+    >Timelines beat memory</h2><!-- /wp:heading -->\n<!-- wp:paragraph --><p>Record observable events, decisions and hypotheses\
+    \ as the incident unfolds. A factual timeline makes the later review more useful and reduces hindsight bias.</p><!-- /wp:paragraph\
+    \ -->\n<!-- wp:heading --><h2 class=\"wp-block-heading\">Fix detection and recovery paths</h2><!-- /wp:heading -->\n<!--\
+    \ wp:paragraph --><p>Correcting the immediate bug is only one outcome. Better alerts, safer defaults, clearer runbooks\
+    \ and rehearsed rollback paths can prevent a similar failure from becoming another prolonged outage.</p><!-- /wp:paragraph\
+    \ -->\nEOF\n\nP1=\"$(post_upsert improve-cloud-security \\\n  \"5 Practical Ways to Improve Cloud Security\" \\\n  \"\
+    $AUTHOR_NOOR\" security \\\n  \"devsecops,aws,automation\" \\\n  \"$tmpdir/improve-cloud-security.html\" \\\n  \"A practical\
+    \ security baseline for identity, infrastructure as code, software delivery and telemetry.\")\"\n\nP2=\"$(post_upsert\
+    \ reliable-cicd-pipeline \\\n  \"Building a Reliable CI/CD Pipeline\" \\\n  \"$AUTHOR_SAMIR\" devops \\\n  \"cicd,automation,devsecops\"\
+    \ \\\n  \"$tmpdir/reliable-cicd-pipeline.html\" \\\n  \"Design delivery pipelines around immutable artifacts, deterministic\
+    \ stages and useful feedback.\")\"\n\nP3=\"$(post_upsert when-to-use-kubernetes \\\n  \"When Should You Use Kubernetes?\"\
+    \ \\\n  \"$AUTHOR_ELENA\" platform-engineering \\\n  \"kubernetes,platform,containers\" \\\n  \"$tmpdir/when-to-use-kubernetes.html\"\
+    \ \\\n  \"Signals that Kubernetes is helping\u2014and warning signs that it may be unnecessary complexity.\")\"\n\nP4=\"\
+    $(post_upsert reduce-cloud-costs \\\n  \"Reducing Cloud Costs Without Sacrificing Reliability\" \\\n  \"$AUTHOR_ELENA\"\
+    \ cloud-engineering \\\n  \"finops,aws,reliability\" \\\n  \"$tmpdir/reduce-cloud-costs.html\" \\\n  \"How to remove recurring\
+    \ cloud waste while protecting service reliability.\")\"\n\nP5=\"$(post_upsert production-platform-migration \\\n  \"\
+    What We Learned Migrating a Production Platform\" \\\n  \"$AUTHOR_SAMIR\" cloud-engineering \\\n  \"kubernetes,terraform,observability\"\
+    \ \\\n  \"$tmpdir/production-platform-migration.html\" \\\n  \"A staged migration approach built around baselines, observability\
+    \ and reversible steps.\")\"\n\nP6=\"$(post_upsert why-infrastructure-as-code-matters \\\n  \"Why Infrastructure as Code\
+    \ Matters\" \\\n  \"$AUTHOR_NOOR\" cloud-engineering \\\n  \"terraform,automation,devsecops\" \\\n  \"$tmpdir/why-infrastructure-as-code-matters.html\"\
+    \ \\\n  \"Infrastructure as code makes platform change reviewable, repeatable and easier to recover.\")\"\n\nP7=\"$(post_upsert\
+    \ container-security-guide \\\n  \"A Practical Guide to Container Security\" \\\n  \"$AUTHOR_NOOR\" security \\\n  \"\
+    containers,devsecops,kubernetes\" \\\n  \"$tmpdir/container-security-guide.html\" \\\n  \"Security controls from image\
+    \ construction through Kubernetes runtime.\")\"\n\nP8=\"$(post_upsert kubernetes-metrics-that-matter \\\n  \"Monitoring\
+    \ Kubernetes: The Metrics That Actually Matter\" \\\n  \"$AUTHOR_ELENA\" reliability \\\n  \"kubernetes,observability,sre\"\
+    \ \\\n  \"$tmpdir/kubernetes-metrics-that-matter.html\" \\\n  \"Start with service behaviour, then use cluster signals\
+    \ to explain saturation and scheduling problems.\")\"\n\nP9=\"$(post_upsert zero-downtime-deployments \\\n  \"How Zero-Downtime\
+    \ Deployments Work\" \\\n  \"$AUTHOR_SAMIR\" devops \\\n  \"kubernetes,cicd,reliability\" \\\n  \"$tmpdir/zero-downtime-deployments.html\"\
+    \ \\\n  \"Readiness, rolling updates and compatible database changes are the foundation of safe deployments.\")\"\n\n\
+    P10=\"$(post_upsert managed-vs-self-hosted-kubernetes \\\n  \"Choosing Between Managed and Self-Hosted Kubernetes\" \\\
+    \n  \"$AUTHOR_ELENA\" platform-engineering \\\n  \"kubernetes,platform,aws\" \\\n  \"$tmpdir/managed-vs-self-hosted-kubernetes.html\"\
+    \ \\\n  \"A practical comparison of operational responsibility, integration and valid self-hosted use cases.\")\"\n\n\
+    P11=\"$(post_upsert platform-engineering-developer-experience \\\n  \"Improving Developer Experience with Platform Engineering\"\
+    \ \\\n  \"$AUTHOR_SAMIR\" platform-engineering \\\n  \"platform,automation,cicd\" \\\n  \"$tmpdir/platform-engineering-developer-experience.html\"\
+    \ \\\n  \"Paved roads should reduce repetitive decisions without hiding operational reality.\")\"\n\nP12=\"$(post_upsert\
+    \ lessons-from-production-incident \\\n  \"Lessons From a Production Incident\" \\\n  \"$AUTHOR_NOOR\" reliability \\\n\
+    \  \"incident-response,sre,observability\" \\\n  \"$tmpdir/lessons-from-production-incident.html\" \\\n  \"Use incidents\
+    \ to improve timelines, detection, recovery paths and the next responder's experience.\")\"\n\nlog \"Adding featured media\"\
+    \nfeatured_image_ensure \"$P1\" security-controls \"Cloud security controls\"\nfeatured_image_ensure \"$P2\" delivery-pipeline\
+    \ \"CI/CD pipeline\"\nfeatured_image_ensure \"$P3\" kubernetes-platform \"Kubernetes platform\"\nfeatured_image_ensure\
+    \ \"$P4\" cloud-cost \"Cloud infrastructure\"\nfeatured_image_ensure \"$P5\" migration \"Platform migration\"\nfeatured_image_ensure\
+    \ \"$P6\" infrastructure-code \"Infrastructure as code\"\nfeatured_image_ensure \"$P7\" container-security \"Container\
+    \ security\"\nfeatured_image_ensure \"$P8\" observability \"Kubernetes observability\"\nfeatured_image_ensure \"$P9\"\
+    \ deployment \"Application deployment\"\nfeatured_image_ensure \"$P10\" managed-kubernetes \"Managed Kubernetes\"\nfeatured_image_ensure\
+    \ \"$P11\" platform-engineering \"Platform engineering\"\nfeatured_image_ensure \"$P12\" incident-response \"Incident\
+    \ response\"\n\nlog \"Adding realistic comments\"\nfor post_id in \"$P1\" \"$P2\" \"$P3\" \"$P4\" \"$P5\" \"$P6\" \"$P7\"\
+    \ \"$P8\" \"$P9\" \"$P10\" \"$P11\" \"$P12\"; do\n  comment_seed_if_empty \"$post_id\"\ndone\n\nlog \"Removing default\
+    \ placeholder content\"\nHELLO_ID=\"$(wp post list --post_type=post --name=hello-world --field=ID --format=ids | awk '{print\
+    \ $1}')\"\nif [ -n \"$HELLO_ID\" ]; then\n  wp post delete \"$HELLO_ID\" --force >/dev/null\nfi\n\nSAMPLE_ID=\"$(wp post\
+    \ list --post_type=page --name=sample-page --field=ID --format=ids | awk '{print $1}')\"\nif [ -n \"$SAMPLE_ID\" ]; then\n\
+    \  wp post delete \"$SAMPLE_ID\" --force >/dev/null\nfi\n\nlog \"Northstar Digital content summary\"\nprintf 'Pages: \
+    \   '\nwp post list --post_type=page --post_status=publish --format=count\nprintf 'Posts:    '\nwp post list --post_type=post\
+    \ --post_status=publish --format=count\nprintf 'Users:    '\nwp user list --format=count\nprintf 'Comments: '\nwp comment\
+    \ list --status=approve --format=count\nprintf 'Media:    '\nwp post list --post_type=attachment --format=count\n"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wordpress-bootstrap
+  namespace: wordpress-poc
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app: wordpress-bootstrap
+    spec:
+      serviceAccountName: wordpress-bootstrap
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        workload: wordpress
+        kubernetes.io/arch: arm64
+      securityContext:
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: wp-cli
+        image: wordpress:cli-php8.5
+        imagePullPolicy: Always
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: mariadb:3306
+        - name: WORDPRESS_DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: database
+        - name: WORDPRESS_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: username
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: password
+        - name: WORDPRESS_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: auth-key
+        - name: WORDPRESS_SECURE_AUTH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: secure-auth-key
+        - name: WORDPRESS_LOGGED_IN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: logged-in-key
+        - name: WORDPRESS_NONCE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: nonce-key
+        - name: WORDPRESS_AUTH_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: auth-salt
+        - name: WORDPRESS_SECURE_AUTH_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: secure-auth-salt
+        - name: WORDPRESS_LOGGED_IN_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: logged-in-salt
+        - name: WORDPRESS_NONCE_SALT
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: nonce-salt
+        - name: SITE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: wordpress-bootstrap
+              key: SITE_URL
+        - name: SITE_TITLE
+          valueFrom:
+            configMapKeyRef:
+              name: wordpress-bootstrap
+              key: SITE_TITLE
+        - name: ADMIN_USER
+          valueFrom:
+            configMapKeyRef:
+              name: wordpress-bootstrap
+              key: ADMIN_USER
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: wordpress-db
+              key: admin-password
+        - name: ADMIN_EMAIL
+          valueFrom:
+            configMapKeyRef:
+              name: wordpress-bootstrap
+              key: ADMIN_EMAIL
+        - name: TIMEZONE
+          valueFrom:
+            configMapKeyRef:
+              name: wordpress-bootstrap
+              key: TIMEZONE
+        - name: WORDPRESS_CORE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: wordpress-bootstrap
+              key: WORDPRESS_CORE_VERSION
+        command:
+        - /bin/sh
+        - -ec
+        - "cd /var/www/html\n\necho \"Waiting for the shared WordPress files...\"\ni=0\nuntil [ -f wp-includes/version.php\
+          \ ] && [ -f wp-config.php ]; do\n  i=$((i + 1))\n  if [ \"$i\" -gt 120 ]; then\n    echo \"Timed out waiting for\
+          \ WordPress files.\" >&2\n    exit 1\n  fi\n  sleep 2\ndone\n\nif wp core is-installed >/dev/null 2>&1; then\n \
+          \ echo \"WordPress is already installed.\"\nelse\n  echo \"Installing WordPress...\"\n  wp core install \\\n   \
+          \ --url=\"$SITE_URL\" \\\n    --title=\"$SITE_TITLE\" \\\n    --admin_user=\"$ADMIN_USER\" \\\n    --admin_password=\"\
+          $ADMIN_PASSWORD\" \\\n    --admin_email=\"$ADMIN_EMAIL\" \\\n    --skip-email\nfi\n\necho \"Reconciling WordPress\
+          \ core...\"\nif [ \"$WORDPRESS_CORE_VERSION\" = \"latest\" ]; then\n  wp core update\nelse\n  current_core=\"$(wp\
+          \ core version)\"\n  if [ \"$current_core\" != \"$WORDPRESS_CORE_VERSION\" ]; then\n    wp core update \\\n    \
+          \  --version=\"$WORDPRESS_CORE_VERSION\" \\\n      --force\n  else\n    echo \"WordPress core is already pinned\
+          \ at $WORDPRESS_CORE_VERSION.\"\n  fi\nfi\nwp core update-db\n\necho \"Applying site settings...\"\nwp option update\
+          \ home \"$SITE_URL\"\nwp option update siteurl \"$SITE_URL\"\nwp option update timezone_string \"$TIMEZONE\"\nwp\
+          \ rewrite structure '/%postname%/' --hard\n\necho \"Reconciling plugins...\"\nwhile IFS= read -r spec || [ -n \"\
+          $spec\" ]; do\n  # Trim CR and ignore blanks/comments.\n  spec=\"$(printf '%s' \"$spec\" | tr -d '\\r')\"\n  case\
+          \ \"$spec\" in\n    \"\"|\\#*) continue ;;\n  esac\n\n  case \"$spec\" in\n    *@*)\n      plugin=\"${spec%@*}\"\
+          \n      version=\"${spec##*@}\"\n      ;;\n    *)\n      plugin=\"$spec\"\n      version=\"latest\"\n      ;;\n\
+          \  esac\n\n  if [ -z \"$plugin\" ] || [ -z \"$version\" ]; then\n    echo \"ERROR: invalid plugin specification:\
+          \ $spec\" >&2\n    exit 1\n  fi\n\n  if [ \"$version\" = \"latest\" ]; then\n    if wp plugin is-installed \"$plugin\"\
+          ; then\n      echo \"Updating $plugin to latest stable...\"\n      wp plugin update \"$plugin\" || true\n      wp\
+          \ plugin activate \"$plugin\"\n    else\n      echo \"Installing latest $plugin...\"\n      wp plugin install \"\
+          $plugin\" --activate\n    fi\n  else\n    # Read the installed version without loading site plugins/themes.\n  \
+          \  # PHP 8.5 deprecation notices from active plugins can otherwise pollute\n    # command substitution and make\
+          \ a correct version look different.\n    installed_version=\"$(\n      wp plugin get \"$plugin\" \\\n        --field=version\
+          \ \\\n        --skip-plugins \\\n        --skip-themes \\\n        2>/dev/null \\\n        | awk 'NF { value=$0\
+          \ } END { print value }' \\\n        || true\n    )\"\n\n    if [ \"$installed_version\" = \"$version\" ]; then\n\
+          \      echo \"$plugin is already pinned at $version; skipping download/reinstall.\"\n\n      if wp plugin is-active\
+          \ \"$plugin\" >/dev/null 2>&1; then\n        echo \"$plugin is already active.\"\n      else\n        echo \"Activating\
+          \ $plugin...\"\n        wp plugin activate \"$plugin\"\n      fi\n    else\n      if [ -n \"$installed_version\"\
+          \ ]; then\n        echo \"Reconciling $plugin: $installed_version -> $version\"\n      else\n        echo \"Installing\
+          \ $plugin at pinned version $version...\"\n      fi\n\n      wp plugin install \"$plugin\" \\\n        --version=\"\
+          $version\" \\\n        --force \\\n        --activate\n    fi\n  fi\n\n  # Keep explicit PoC pins under bootstrap\
+          \ control rather than\n  # allowing WordPress core's plugin auto-update mechanism to\n  # silently change them between\
+          \ test runs.\n  wp plugin auto-updates disable \"$plugin\" >/dev/null 2>&1 || true\ndone < /bootstrap/plugins.txt\n\
+          \necho \"Seeding realistic Northstar Digital content...\"\n/bin/sh /bootstrap/seed-site.sh\n\necho \"Applying common\
+          \ plugin configuration...\"\nwp eval-file /bootstrap/configure-plugins.php\n\nif wp plugin is-active redirection\
+          \ >/dev/null 2>&1; then\n  echo \"Initializing/upgrading Redirection database...\"\n  wp redirection database install\
+          \ >/dev/null 2>&1 || \\\n    wp redirection database upgrade >/dev/null 2>&1 || true\nfi\n\necho \"Running plugin/site\
+          \ configuration hook...\"\n/bin/sh /bootstrap/after-install.sh\n\necho\necho \"Installed plugins:\"\nwp plugin list\
+          \ \\\n  --skip-plugins \\\n  --skip-themes \\\n  --fields=name,status,version,update \\\n  --format=table\n\necho\n\
+          echo \"WordPress bootstrap complete.\"\n"
+        volumeMounts:
+        - name: wordpress-shared
+          mountPath: /var/www/html
+        - name: bootstrap
+          mountPath: /bootstrap
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: wordpress-shared
+        persistentVolumeClaim:
+          claimName: wordpress-shared
+      - name: bootstrap
+        configMap:
+          name: wordpress-bootstrap
+          defaultMode: 493

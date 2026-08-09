@@ -1,0 +1,47 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    deployment:
+      replicas: 3
+      minReadySeconds: 5
+      revisionHistoryLimit: 3
+
+    # Hard one-pod-per-worker anti-affinity and a surge rollout are mutually
+    # incompatible when there are exactly three eligible workers. Roll one at
+    # a time instead: keep two available, release one worker, then schedule
+    # the replacement there.
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+        maxSurge: 0
+
+    # Keep ingress replicas on the three worker nodes, matching the WordPress
+    # failure domains rather than consuming the single control-plane node.
+    nodeSelector:
+      workload: wordpress
+
+    # With exactly three eligible workers, require one Traefik pod per worker.
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: traefik
+            topologyKey: kubernetes.io/hostname
+
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 2
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
