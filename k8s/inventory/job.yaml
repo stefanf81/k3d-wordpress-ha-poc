@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wordpress-inventory
+  namespace: wordpress-poc
+  labels:
+    app: wordpress-inventory
+    app.kubernetes.io/name: wp-cli
+    app.kubernetes.io/component: inventory
+    app.kubernetes.io/part-of: wordpress-ha-poc
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: wordpress-inventory
+        app.kubernetes.io/name: wp-cli
+        app.kubernetes.io/component: inventory
+        app.kubernetes.io/part-of: wordpress-ha-poc
+    spec:
+      serviceAccountName: wordpress-inventory
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        workload: wordpress
+      securityContext:
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wp-cli
+          image: wordpress:cli-php8.5
+          imagePullPolicy: IfNotPresent
+          workingDir: /var/www/html
+          command:
+            - /bin/sh
+            - /scripts/inventory.sh
+          envFrom:
+            - secretRef:
+                name: wordpress-database
+            - secretRef:
+                name: wordpress-keys
+          env:
+            # uid 33 has no home directory in the Alpine-based CLI image.
+            - name: HOME
+              value: /tmp
+          # The CLI image's www-data is uid 82 (Alpine) and is declared by
+          # name, which runAsNonRoot cannot verify. Run as uid 33, the Debian
+          # www-data that owns the shared WordPress files.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 33
+            runAsGroup: 33
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: wordpress-shared
+              mountPath: /var/www/html
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: wordpress-shared
+          persistentVolumeClaim:
+            claimName: wordpress-shared
+        - name: scripts
+          configMap:
+            name: wordpress-inventory

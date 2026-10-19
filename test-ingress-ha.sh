@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
+# Deletes one Traefik pod and checks that the site keeps answering through
+# the other two ingress replicas. Fails if more than MAX_FAILED_REQUESTS
+# (default 0) requests fail during the disruption.
 set -euo pipefail
+
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+require_commands curl
+require_cluster
 
 echo "Current Traefik replicas:"
 kubectl get pods \
@@ -9,9 +18,9 @@ kubectl get pods \
 
 echo
 echo "HTTP check before failure:"
-curl --fail --silent --show-error -o /dev/null \
-  -w "HTTP %{http_code}\n" \
-  http://localhost:8080/
+curl --fail --silent --show-error --output /dev/null --max-time 10 \
+  --write-out "HTTP %{http_code}\n" \
+  "$SITE_URL/"
 
 POD="$(
   kubectl get pods \
@@ -26,17 +35,8 @@ kubectl delete pod -n kube-system "$POD" --wait=false
 
 echo
 echo "Checking the site while ingress continues on the other replicas:"
-for i in $(seq 1 10); do
-  code="$(
-    curl --silent --location \
-      --output /dev/null \
-      --write-out '%{http_code}' \
-      --max-time 5 \
-      http://localhost:8080/ || true
-  )"
-  printf "request %02d -> HTTP %s\n" "$i" "$code"
-  sleep 1
-done
+result=0
+probe_site_during_failure 10 || result=$?
 
 echo
 echo "Waiting for Traefik to return to 3 ready replicas..."
@@ -50,3 +50,5 @@ kubectl get pods \
   -n kube-system \
   -l app.kubernetes.io/name=traefik \
   -o wide
+
+exit "$result"

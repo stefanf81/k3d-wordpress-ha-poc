@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
+# Deletes the k3d cluster but keeps the WordPress files and the MariaDB
+# volume, so ./start.sh recreates the same site.
 set -euo pipefail
 
-MARIADB_DATA_VOLUME="${MARIADB_DATA_VOLUME:-wordpress-ha-poc-mariadb-data}"
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-k3d cluster delete wordpress-ha-poc
+require_commands k3d
 
-echo
-echo "Cluster deleted."
-echo "Preserved WordPress files: ./data/wordpress"
-echo "Preserved MariaDB Docker volume: $MARIADB_DATA_VOLUME"
-echo "Run ./start.sh to recreate the cluster with the same data."
+k3d cluster delete "$CLUSTER_NAME"
+
+cat <<EOF
+
+Cluster deleted.
+Preserved WordPress files: ./data/wordpress
+Preserved MariaDB Docker volume: $MARIADB_DATA_VOLUME
+Run ./start.sh to recreate the cluster with the same data.
+EOF

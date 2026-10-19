@@ -1,0 +1,6 @@
+wordfence@8.2.2
+wordpress-seo@28.1
+contact-form-7@6.1.6
+flamingo@2.6.3
+query-monitor@4.0.7
+redirection@5.9.0

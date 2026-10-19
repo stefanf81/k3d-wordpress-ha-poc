@@ -8,13 +8,19 @@ metadata:
 servers: 1
 agents: 3
 
-# Default is exported by start.sh. Override K3S_IMAGE to test a different
-# k3s release without editing this file.
+# start.sh exports these variables (defaults live in lib.sh); k3d expands
+# them. Override K3S_IMAGE to test a different k3s release without editing
+# this file.
 image: ${K3S_IMAGE}
+
+# Only reachable from this machine: the lab ships known admin credentials and
+# deliberately old plugin versions, so never publish it on the LAN.
+kubeAPI:
+  hostIP: "127.0.0.1"
 
 # http://localhost:8080 -> k3d load balancer -> Traefik.
 ports:
-  - port: 8080:80
+  - port: 127.0.0.1:8080:80
     nodeFilters:
       - loadbalancer
 

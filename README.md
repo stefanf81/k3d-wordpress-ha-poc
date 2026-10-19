@@ -1,476 +1,200 @@
 # k3d WordPress HA PoC
 
-Local WordPress high-availability **web tier** lab using k3d.
+A local lab for a highly available WordPress **web tier** on k3d: three
+WordPress replicas on three worker nodes, three Traefik ingress replicas,
+shared WordPress files and a single MariaDB instance. The site is installed,
+populated with realistic demo content and configured with a pinned plugin set
+automatically.
 
+The lab is meant for HA experiments, plugin/vulnerability testing and
+scanner practice on your own machine. It is **not** a production design; see
+[Intentional trade-offs](#intentional-trade-offs).
 
-
-
-
-### Idempotent pinned-plugin reconciliation
-
-Pinned plugins are no longer re-downloaded when the installed version already
-matches the requested version.
-
-The version lookup uses `--skip-plugins --skip-themes` and takes the final
-non-empty output line. This prevents PHP 8.5 deprecation notices from active
-plugins from contaminating the captured version string.
-
-A repeated bootstrap now produces output like:
-
-```text
-wordfence is already pinned at 8.2.2; skipping download/reinstall.
-wordfence is already active.
-```
-
-A pinned plugin is downloaded only when it is missing or its installed version
-differs from the requested pin.
-
-
-### Idempotent Primary menu reconciliation
-
-The content bootstrap may be run repeatedly with `./reconfigure.sh`.
-
-The Primary navigation menu is resolved by its WordPress `nav_menu` taxonomy
-term ID rather than by parsing `wp menu list` output. If the menu already
-exists it is reused; if it does not exist it is created with
-`wp menu create --porcelain`. Each page is then added only when its
-`_menu_item_object_id` is not already related to that exact menu term.
-
-This avoids duplicate-menu failures such as:
-
-```text
-Error: The menu name Primary conflicts with another menu name.
-```
-
-
-
-### Clean WP-CLI inventory under Restricted Pod Security
-
-The on-demand `wordpress-inventory` Job explicitly declares
-`runAsNonRoot: true`. The official `wordpress:cli-php8.5` image already runs as
-`www-data`; this explicit declaration lets Kubernetes Pod Security Admission
-verify the non-root intent and removes the Restricted-profile warning.
-
-Plugin and theme inventory commands use `--skip-plugins --skip-themes`.
-Inventory does not need to execute active plugin/theme runtime code, so this
-keeps Wordfence PHP 8.5 deprecation messages out of the JSON while preserving
-installed versions, activation state and update metadata.
-
-The bootstrap's final plugin table uses the same flags, `show-plugins.sh`
-filters historical `Deprecated:` lines, and `versions.sh` explicitly selects
-the main `wordpress` container.
-
-
-## 2026 engineering review
-
-This revision applies a set of current Kubernetes, k3s, WordPress and MariaDB
-practices while keeping the project intentionally lightweight enough for a local
-security lab.
-
-
-
-
-
-
-### MariaDB Docker named volume
-
-MariaDB persistence is provided by the Docker volume:
-
-```text
-wordpress-ha-poc-mariadb-data
-```
-
-`k3d.yaml` mounts that volume only into `server:0` at:
-
-```text
-/var/lib/mariadb-data
-```
-
-The Kubernetes `mariadb-data` hostPath PV then maps `/var/lib/mysql` in the
-MariaDB pod to that node-local path.
-
-This keeps the PoC's Kubernetes storage model simple while avoiding the macOS
-bind-mount filesystem semantics that caused:
-
-```text
-Setting lower_case_table_names=2 because file system for /var/lib/mysql/ is case insensitive
-```
-
-`start.sh` and `verify.sh` query MariaDB and require:
-
-```sql
-SELECT @@lower_case_table_names;
--- 0
-```
-
-You may override the Docker volume name:
+## Quick start
 
 ```bash
-MARIADB_DATA_VOLUME=my-test-db ./start.sh
+make up          # or ./start.sh
 ```
 
-Use the same environment variable with `stop.sh`, `reset.sh`, `verify.sh` and
-`versions.sh` when using a custom name.
-
-
-### WP-Cron readiness gating
-
-The Kubernetes WP-Cron Job does not immediately call `wp-cron.php`.
-
-During a WordPress Deployment rollout or initial bootstrap, the `wordpress`
-Service can temporarily have zero Ready endpoints. A direct curl during that
-window produces:
+Then open <http://localhost:8080>. The admin area is at
+<http://localhost:8080/wp-admin/>:
 
 ```text
-curl: (7) Failed to connect to wordpress port 80
+Username: admin
+Password: admin-poc-change-me
 ```
 
-The CronJob now waits for:
+These credentials are disposable PoC values. The site and the Kubernetes API
+are bound to `127.0.0.1` only, so nothing is published on your network.
 
-```text
-http://wordpress/healthz.php
-```
+## Requirements
 
-to return HTTP 200 before triggering `wp-cron.php`.
+- Docker: Docker Desktop on macOS/Windows, or Docker Engine on Linux
+- [k3d](https://k3d.io) v5
+- kubectl
+- curl
 
-It checks every 5 seconds for up to 5 minutes. If WordPress becomes Ready, the
-cron request is sent normally. If the application remains unavailable for the
-entire window, the Job fails intentionally so the outage remains visible
-instead of being silently ignored.
+Any CPU architecture works. k3d nodes are containers on the Docker host, so
+they run natively on its architecture (arm64 on Apple Silicon, amd64 on most
+Linux and Intel machines), and every image used is multi-arch.
 
+`make lint` additionally uses shellcheck, php and kubeconform when they are
+installed; missing tools are skipped.
 
-### Runtime log cleanup
+## Commands
 
-Live testing showed two harmless but noisy messages:
+| Make target            | Script                               | What it does |
+| ---------------------- | ------------------------------------ | ------------ |
+| `make up`              | `./start.sh`                         | Create (or reuse) the cluster and reconcile everything |
+| `make reconfigure`     | `./reconfigure.sh`                   | Re-run the WP-CLI bootstrap only (plugins, content, settings) |
+| `make verify`          | `./verify.sh`                        | Check placement, HA, storage, policies and HTTP |
+| `make check`           | `./check.sh`                         | Runtime checks: bootstrap idempotency, file ownership, WP-Cron, inventory |
+| `make test-ha`         | `./test-ha.sh`                       | Delete a WordPress pod and assert the site keeps answering |
+| `make test-ingress-ha` | `./test-ingress-ha.sh`               | Delete a Traefik pod and assert the site keeps answering |
+| `make inventory`       | `./wordpress-inventory.sh`           | Save core/plugin/theme versions to `./reports/inventory/` |
+| `make plugins`         | `./show-plugins.sh`                  | Show the plugin table from the latest bootstrap |
+| `make versions`        | `./versions.sh`                      | Show tool, k3s, image and application versions |
+| `make arch`            | `./verify-arm64.sh`                  | Show node architectures and the PHP build |
+| `make lint`            | `./lint.sh`                          | Static checks; no cluster needed |
+| `make down`            | `./stop.sh`                          | Delete the cluster, keep WordPress files and the database |
+| `make reset`           | `./reset.sh`                         | Delete everything (except `./backups/`) and start fresh |
+| `make migrate-db`      | `./migrate-mariadb-to-named-volume.sh` | Migrate a database from an older revision |
 
-- Apache emitted `AH00558` because a Kubernetes pod IP is not a stable FQDN.
-  The WordPress container now creates an Apache `ServerName localhost`
-  configuration before starting `apache2-foreground`.
-- MariaDB logged an `Aborted connection ... unauthenticated` entry every ten
-  seconds because a raw TCP liveness probe opened a socket and immediately
-  disconnected. Startup/readiness still execute an authenticated `SELECT 1`,
-  while liveness now checks the MariaDB Unix socket and PID 1 locally.
-
-The WordPress readiness interval is also 10 seconds instead of 5 seconds to
-reduce health-check access-log volume while still removing an unhealthy pod
-quickly.
-
-A single initial MariaDB startup-probe failure such as `Can't connect to server
-on 127.0.0.1` is expected while the server is still starting; the generous
-startup failure threshold handles this without causing a restart.
-
-### Traefik rollout strategy
-
-Traefik uses three replicas with required pod anti-affinity: one ingress pod per
-WordPress worker.
-
-The Traefik Helm chart normally uses a surge rollout (`maxSurge: 1`,
-`maxUnavailable: 0`). That cannot work when all three eligible workers already
-contain a Traefik pod: the fourth surge pod has no legal node.
-
-The PoC therefore explicitly uses:
-
-```yaml
-updateStrategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxUnavailable: 1
-    maxSurge: 0
-```
-
-Together with the Traefik PDB `minAvailable: 2`, this rolls the ingress tier as:
-
-```text
-3 ready
-  -> remove 1 old pod
-2 ready
-  -> schedule replacement on the freed worker
-3 ready
-  -> repeat
-```
-
-This preserves hard one-per-worker placement without deadlocking Deployment
-rollouts.
-
-### k3d/containerd compatibility fixes
-
-Two local-runtime issues found during live testing on Apple Silicon are handled
-explicitly:
-
-1. `wp-config.php` and `healthz.php` are **not mounted as ConfigMap subPath files
-   inside `/var/www/html`**. `/var/www/html` is already the RWX WordPress
-   filesystem. The init container instead copies both files into that shared
-   filesystem with mode `0444`. This avoids nested bind-mount failures from
-   containerd/runc while keeping the files non-writable by Apache/PHP.
-
-2. MariaDB probes **do not depend on `.my-healthcheck.cnf`**. Startup and
-   readiness execute `SELECT 1` using the WordPress database account from the
-   Kubernetes Secret. Liveness checks only TCP/3306, so a credential/config
-   problem makes MariaDB NotReady without creating an endless restart loop.
-
-WP-Cron also uses curl retry-all-errors so a short Service endpoint transition
-does not immediately fail the scheduled Job.
-
-### WordPress readiness probe
-
-The WordPress readiness probe uses:
-
-```text
-/healthz.php
-```
-
-rather than `/`.
-
-This is intentional. The public site URL is `http://localhost:8080`, while
-WordPress pods themselves listen on port 80. Probing `/` can trigger WordPress
-canonical URL handling and redirect kubelet from the pod's port 80 to port
-8080. The dedicated endpoint avoids that redirect and checks:
-
-- PHP/Apache can execute the request
-- MariaDB accepts a connection
-- the WordPress `wp_options` table exists
-
-Liveness remains a lightweight TCP check so a temporary database failure makes
-a replica NotReady without causing Kubernetes to restart all web containers.
-
-On a fresh database the readiness endpoint returns HTTP 503 until the WP-CLI
-bootstrap Job creates the WordPress schema. `start.sh` therefore starts the
-bootstrap Job before waiting for all WordPress replicas to become Ready.
-
-### Changes applied
-
-- **K3s is pinned by default** through `K3S_IMAGE` instead of silently changing
-  the Kubernetes runtime underneath the lab. Override the environment variable
-  when you intentionally want to test another k3s release.
-- **K3s Secret encryption at rest** is enabled with `--secrets-encryption`.
-- The namespace **enforces Pod Security `baseline`** and audits/warns against
-  `restricted`. The stock WordPress Apache image is not a clean fit for
-  `restricted` enforcement, so the lab exposes that gap rather than pretending
-  it is compliant.
-- Workloads use dedicated **ServiceAccounts with API token automount disabled**.
-- A namespace **default-deny ingress NetworkPolicy** is applied. WordPress
-  accepts HTTP only from Traefik and same-namespace lab clients; MariaDB accepts
-  TCP/3306 only from WordPress and the bootstrap Job.
-- Pods use **`seccompProfile: RuntimeDefault`**.
-- MariaDB uses the official image's **`healthcheck.sh`** probe and
-  `MARIADB_AUTO_UPGRADE=1`.
-- Bundled **Traefik is scaled to 3 replicas**, pinned to the worker pool,
-  anti-affined across all three workers and protected by a PDB. The ingress
-  tier therefore does not remain a hidden single-pod dependency.
-- WordPress uses **one central WP-CLI update authority**. This fixes an important
-  shared-storage edge case: changing the floating WordPress image does not by
-  itself replace core files already persisted in the RWX volume.
-- Set `WORDPRESS_CORE_VERSION` in `k8s/bootstrap.yaml` to `latest` or an exact
-  version when reproducing a vulnerability.
-- WordPress background core/plugin auto-updates are disabled so three web
-  replicas cannot race the central reconciler.
-- `DISALLOW_FILE_EDIT` is enabled; the environment type is `local`; PHP memory
-  limits are explicit; debug logs are written outside the web root.
-- WordPress rolls with **`maxUnavailable: 0`**, a short readiness soak and a
-  graceful `preStop`; the PDB allows eviction of already-unhealthy pods so a
-  drain is less likely to deadlock.
-- WP-Cron has retry/timeout controls, job-history limits and resource bounds.
-- Runtime data is ignored by Git via `.gitignore`.
-- `Makefile`, `verify.sh` and `versions.sh` provide repeatable developer
-  operations and capture the actual image IDs used by floating tags.
-
-### Useful commands
-
-```bash
-make up
-make verify
-make versions
-make test-ha
-make test-ingress-ha
-make reconfigure
-make down
-```
-
-To reproduce a particular WordPress core release:
-
-```yaml
-# k8s/bootstrap.yaml
-WORDPRESS_CORE_VERSION: "7.0.2"
-```
-
-Then:
-
-```bash
-./reconfigure.sh
-```
-
-To try another k3s release without editing YAML:
-
-```bash
-K3S_IMAGE=rancher/k3s:<version> ./start.sh
-```
-
-### Intentional PoC trade-offs
-
-The project still does **not** claim full-stack HA:
-
-- MariaDB remains a single instance and is the largest remaining application SPOF.
-- k3d itself still has one control-plane server and one host-facing load-balancer
-  container; those are acceptable local-lab constraints, not production HA.
-- Shared WordPress storage is a k3d host bind mount; it is appropriate for this
-  one-machine lab, not a real multi-node storage design.
-- Egress is intentionally open because plugin/theme/image bootstrap and
-  vulnerability testing need internet access.
-- The official Apache WordPress image is retained for familiarity and plugin
-  compatibility rather than replacing it with a heavily hardened custom image.
-
-For a production architecture, the next substantial changes would be an HA
-managed/clustered database, production RWX/object storage for media, immutable
-application images for plugin/theme code, TLS and stricter egress controls.
+Every script talks to the lab through the `k3d-wordpress-ha-poc` kubectl
+context explicitly, so none of them can act on another cluster even if your
+current context points elsewhere.
 
 ## Architecture
 
 ```text
-                         http://localhost:8080
+                    http://localhost:8080 (127.0.0.1 only)
                                   |
                            k3d load balancer
                                   |
-                              Traefik
+                Traefik (3 replicas, one per worker)
                                   |
                          wordpress Service
                        /          |          \
-                      /           |           \
              worker-0         worker-1         worker-2
              WordPress        WordPress        WordPress
              PHP 8.5          PHP 8.5          PHP 8.5
                  \               |               /
-                  \              |              /
-                   +---- shared wp-content ----+
-                         + WordPress core
-                         via one host directory
+                  +---- shared WordPress tree ---+
+                        (one host directory)
                                   |
                                   v
                               MariaDB
                            on server-0
 ```
 
-## What is HA here?
+### What is HA here?
 
 The WordPress **web/application tier** is HA:
 
-- 3 k3d worker nodes
-- 3 WordPress replicas
-- strict topology spreading by `kubernetes.io/hostname`
-- one WordPress pod per worker
-- Kubernetes Service load balancing
-- Traefik ingress
-- PodDisruptionBudget with `minAvailable: 2`
-- shared WordPress filesystem for plugins, themes and uploads
-- Kubernetes recreates a failed WordPress pod on its worker pool
+- 3 k3d worker nodes, 3 WordPress replicas, one per worker
+  (`topologySpreadConstraints` with `maxSkew: 1`, `minDomains: 3`,
+  `whenUnsatisfiable: DoNotSchedule`)
+- Kubernetes Service load balancing behind 3 Traefik replicas, one per worker
+- PodDisruptionBudgets with `minAvailable: 2` for WordPress and Traefik
+- a shared WordPress filesystem for core, plugins, themes and uploads
+- Kubernetes recreates a failed WordPress pod on its worker
 
-The WordPress image is:
+### Important limitation
 
-```text
-wordpress:php8.5-apache
-```
+MariaDB is intentionally a **single instance**, so a MariaDB failure is still
+a site outage. This lab demonstrates frontend/application HA, not a fully HA
+WordPress stack. A production-style next step would use a clustered database
+such as MariaDB Galera (normally behind a database proxy) and production-grade
+shared or object storage.
 
-This tag means:
-
-- latest stable WordPress published in the official image
-- PHP 8.5
-- Apache
-- multi-architecture image
-- native `linux/arm64` is selected on an Apple Silicon Mac
-
-The WordPress Deployment also uses:
-
-```yaml
-imagePullPolicy: Always
-nodeSelector:
-  workload: wordpress
-  kubernetes.io/arch: arm64
-```
-
-so recreating/restarting the lab checks for a newer build of the floating PHP 8.5
-tag, and WordPress is only scheduled on ARM64 worker nodes.
-
-## Important limitation
-
-MariaDB is intentionally still a **single database instance**.
-
-Therefore this lab demonstrates WordPress frontend/application HA, but it is
-**not a fully HA WordPress stack**. A MariaDB failure is still a site outage.
-
-A production-style next step would use a clustered database such as MariaDB
-Galera (normally behind a database proxy/service) and production-grade shared
-storage or object storage.
-
-## How shared WordPress storage works locally
-
-This setup avoids NFS/Ceph/Longhorn because it is a local k3d PoC.
-
-`./data/wordpress` on your machine is bind-mounted into **all three k3d worker
-containers** at:
+## Repository layout
 
 ```text
-/var/lib/wordpress-shared
+k3d.yaml                 cluster: 1 server, 3 agents, ports, volumes, k3s flags
+lib.sh                   shared settings and helpers for every script
+k8s/
+  storage.yaml           namespace (Pod Security labels), PVs and PVCs
+  secrets.yaml           PoC credentials and WordPress salts
+  security.yaml          service accounts and network policies
+  mariadb.yaml           MariaDB Deployment and Service
+  traefik-config.yaml    HelmChartConfig for the bundled Traefik
+  wordpress/             kustomization: Deployment, PDB, Service, Ingress,
+                         WP-Cron CronJob, wp-config.php, healthz.php and the
+                         init-container script
+  bootstrap/             kustomization: WP-CLI bootstrap Job, site.env,
+                         plugins.txt, seed and configuration scripts
+  inventory/             kustomization: on-demand WP-CLI inventory Job
+.github/workflows/ci.yaml  lint plus an end-to-end k3d smoke test
 ```
 
-Kubernetes then exposes that path through an RWX `hostPath` PV.
+Scripts, PHP and page content are real files. Kustomize's
+`configMapGenerator` turns them into ConfigMaps (`kubectl apply -k`), so they
+can be linted, diffed and reviewed like any other code. The WordPress
+ConfigMap name carries a content hash: editing `wp-config.php`,
+`healthz.php` or the init script and re-running `./start.sh` rolls the
+WordPress Deployment.
 
-All three WordPress pods therefore see the same physical files.
+## Configuration
 
-This is useful for k3d, but **do not copy this pattern to a real multi-machine
-Kubernetes cluster**. On real nodes, identical hostPath strings point to
-different disks.
+| What | Where |
+| ---- | ----- |
+| Site URL, title, admin user/email, timezone, WordPress core version | `k8s/bootstrap/site.env` |
+| Plugins and pinned versions | `k8s/bootstrap/plugins.txt` |
+| Extra WP-CLI settings (run last, every reconcile) | `k8s/bootstrap/after-install.sh` |
+| Plugin configuration | `k8s/bootstrap/configure-plugins.php` |
+| Demo content | `k8s/bootstrap/seed-site.sh`, `k8s/bootstrap/contact.html` |
+| Passwords and salts | `k8s/secrets.yaml` |
+| WordPress runtime config | `k8s/wordpress/wp-config.php` |
 
-## Requirements
-
-- Docker
-- k3d
-- kubectl
-- curl
-
-k3d itself requires Docker and is intended for running multi-node k3s clusters
-inside Docker.
-
-## Start
+After editing anything under `k8s/bootstrap/`:
 
 ```bash
-./start.sh
+./reconfigure.sh
 ```
 
-Then open:
+This recreates only the WP-CLI bootstrap Job. It does not rebuild the cluster
+or restart the WordPress replicas. If the bootstrap fails, the script prints
+the Job's logs and exits non-zero.
+
+Environment overrides for `./start.sh` and the other scripts:
+
+```bash
+K3S_IMAGE=rancher/k3s:<version> ./start.sh     # try another k3s release
+MARIADB_DATA_VOLUME=my-test-db ./start.sh      # use another database volume
+```
+
+k3s is pinned by default (`rancher/k3s:v1.36.2-k3s1`, set in `lib.sh`) so the
+Kubernetes runtime doesn't change underneath the lab. Use the same
+`MARIADB_DATA_VOLUME` with every script when you override it.
+
+### WordPress core version
+
+`WORDPRESS_CORE_VERSION` in `k8s/bootstrap/site.env` is `latest` or an exact
+version. To reproduce a particular release:
 
 ```text
-http://localhost:8080
+WORDPRESS_CORE_VERSION=7.0.2
 ```
 
-The site is installed and populated automatically. No WordPress installer
-wizard is required.
+then run `./reconfigure.sh`.
 
+The WP-CLI bootstrap is the single update authority for core and plugins. The
+web replicas have background updates disabled (`WP_AUTO_UPDATE_CORE`,
+`AUTOMATIC_UPDATER_DISABLED`) so three replicas can't race each other on the
+shared files. Changing the WordPress image tag does **not** replace core files
+already on the shared volume; the bootstrap does.
 
-## Automatic WordPress + plugin setup
+## Automatic WordPress and plugin setup
 
-`./start.sh` now completes the WordPress installer automatically with WP-CLI.
+`./start.sh` installs WordPress with WP-CLI (`wordpress:cli-php8.5`), so no
+installer wizard is needed. The administrator password, database passwords and
+WordPress salts live in Kubernetes Secrets, and k3s encrypts Secrets at rest
+(`--secrets-encryption`). They are still committed to Git: do not reuse these
+values or this secret-management approach outside the lab.
 
-Default local login:
+### Pinned plugins
 
-```text
-URL:      http://localhost:8080/wp-admin/
-Username: admin
-Password: admin-poc-change-me
-```
-
-These credentials are intentionally disposable. The administrator password,
-database passwords and WordPress salts are stored in a Kubernetes Secret; k3s
-Secret encryption at rest is enabled for this local lab. Do not reuse these
-static PoC values outside this environment.
-
-The bootstrap uses the official native multi-architecture image:
-
-```text
-wordpress:cli-php8.5
-```
-
-### Default plugins and pinned versions
-
-The lab now ships with a realistic, explicitly pinned plugin set:
+The default `plugins.txt`:
 
 ```text
 wordfence@8.2.2
@@ -481,7 +205,7 @@ query-monitor@4.0.7
 redirection@5.9.0
 ```
 
-The version syntax is handled directly by the bootstrap:
+Each line is one of:
 
 ```text
 plugin-slug          latest stable
@@ -489,431 +213,378 @@ plugin-slug@latest   latest stable
 plugin-slug@1.2.3    exactly 1.2.3
 ```
 
+Blank lines and `#` comments are ignored.
 
-```yaml
-plugins.txt: |
-  wordfence@8.2.2
-  contact-form-7@6.0.3
+A pinned plugin is downloaded only when it is missing or its installed version
+differs from the pin; then it is installed with `--version` and `--force`. A
+repeated bootstrap prints, for example:
+
+```text
+wordfence is already pinned at 8.2.2; skipping download/reinstall.
+wordfence is already active.
 ```
 
-Then run:
+The installed version is read with `--skip-plugins --skip-themes`, taking the
+last non-empty output line, so PHP 8.5 deprecation notices from active
+plugins can't make a correct version look different. WordPress's own
+auto-updates are disabled for every managed plugin, so a version doesn't
+silently move between vulnerability-testing runs.
 
-```bash
-./reconfigure.sh
-```
+### Plugin configuration
 
-Pinned versions are installed with WP-CLI's `--version` and `--force` options.
-The bootstrap also disables WordPress core auto-updates for managed plugins so
-a version doesn't silently move between vulnerability-testing runs.
+`configure-plugins.php` configures plugins rather than only activating them:
 
-### Common plugin configuration
+- **Yoast SEO**: Northstar Digital as an organization, website and
+  organization names, homepage Open Graph title/description, and SEO titles and
+  descriptions for key pages.
+- **Contact Form 7 + Flamingo**: a `Northstar Project Enquiry` form (name,
+  email, company, project type, message, consent) embedded in the Contact page.
+  `skip_mail: on` because the lab has no mail server; Flamingo stores
+  submissions in MariaDB, so you can submit the form and inspect the messages
+  in WordPress Admin.
+- **Query Monitor**: active with its development defaults.
+- **Wordfence**: active with defaults, intentionally not locked down so it
+  doesn't interfere with scanning and vulnerability testing in the lab.
+- **Redirection**: its database is installed/upgraded by WP-CLI.
 
-The bootstrap configures several plugins instead of only activating them:
-
-**Yoast SEO**
-
-- Northstar Digital is configured as an organization
-- website and organization names are populated
-- homepage Open Graph title/description are populated
-- realistic SEO titles and descriptions are added to key pages
-
-**Contact Form 7 + Flamingo**
-
-- creates a `Northstar Project Enquiry` form
-- adds name, email, company, project type, message and consent fields
-- embeds the form into the Contact page
-- uses `skip_mail: on` because this local PoC has no mail server
-- Flamingo stores submitted test messages in MariaDB
-
-This means you can actually submit the form locally and then inspect its
-stored messages from WordPress Admin.
-
-**Query Monitor**
-
-- activated with its normal development defaults
-
-**Wordfence**
-
-- activated with defaults
-- intentionally not aggressively locked down so it doesn't interfere with
-
-**Redirection**
-
-- plugin database is automatically installed/upgraded by WP-CLI
-
-
-### Preconfigure plugin settings
-
-`k8s/bootstrap.yaml` also contains:
-
-```yaml
-after-install.sh: |
-  #!/bin/sh
-  set -eu
-
-  wp option update blog_public 0
-  wp option update default_comment_status closed
-  wp option update default_ping_status closed
-```
-
-Add plugin-specific WP-CLI commands there.
-
-For plugins that save their configuration as WordPress options, common patterns
-are:
+For plugins that store settings as options, add WP-CLI commands to
+`after-install.sh`, for example:
 
 ```bash
 wp option update OPTION_NAME 'value'
 wp option patch update OPTION_NAME nested_key 'value'
 ```
 
-The exact option names depend on the plugin.
+Keep them idempotent: the hook runs on every `./start.sh` and
+`./reconfigure.sh`. It also owns the site-wide defaults (`blog_public 0`,
+comments and pings closed by default).
 
-`after-install.sh` should be idempotent because it runs whenever
-`./reconfigure.sh` or `./start.sh` reconciles the environment.
+## Demo content
 
-### Reconcile plugins/settings
+The bootstrap creates a fictional technology consultancy, **Northstar
+Digital**, so the site behaves like a real one:
 
-After editing the bootstrap ConfigMap:
-
-```bash
-./reconfigure.sh
-```
-
-This recreates only the WP-CLI bootstrap Job. It does not rebuild the cluster
-or restart the three WordPress web replicas.
-
-Show the plugin inventory from the most recent bootstrap:
-
-```bash
-./show-plugins.sh
-```
-
-
-## Realistic demo content
-
-The bootstrap now creates a fictional technology consultancy called
-**Northstar Digital** so the WordPress installation looks and behaves more like
-a real site.
-
-It creates:
-
-- 7 published pages: Home, About, Services, Case Studies, Insights, Contact and Privacy Policy
-- 12 published technical articles
-- 3 fictional author accounts
-- 5 categories
-- 12 tags
-- up to 24 seeded comments
-- featured images for the articles when placeholder-image download succeeds
-- a static homepage and separate Insights/blog page
-- a Primary menu fallback
+- 7 published pages: Home, About, Services, Case Studies, Insights, Contact
+  and Privacy Policy
+- 12 technical articles (cloud security, CI/CD, Kubernetes adoption, cost
+  optimisation, migrations, infrastructure as code, container security,
+  observability, zero-downtime deployment, managed vs self-hosted Kubernetes,
+  platform engineering, incident response), open for comments
+- 3 fictional authors, 5 categories, 12 tags and up to 24 seeded comments
+- featured images when the placeholder-image download succeeds
+- a static homepage, a separate Insights blog page and a Primary menu
 - the Twenty Twenty-Five theme
 
-Example article topics include:
-
-- cloud security
-- CI/CD reliability
-- Kubernetes adoption
-- cloud cost optimisation
-- platform migrations
-- infrastructure as code
-- container security
-- Kubernetes observability
-- zero-downtime deployment
-- managed vs self-hosted Kubernetes
-- platform engineering
-- incident response
-
-All names, organisations, email addresses, statistics and case studies in the
-seed data are fictional.
+All names, organisations, email addresses, statistics and case studies are
+fictional. WordPress's default `Hello world!` post and `Sample Page` are
+removed.
 
 ### Idempotent seeding
 
-The content generator is stored inside:
+Everything is keyed by stable slugs and updated in place, so `./start.sh` and
+`./reconfigure.sh` are safe to repeat; `make check` verifies that a repeated
+bootstrap changes no content counts.
 
-```text
-k8s/bootstrap.yaml
-```
-
-as:
-
-```text
-seed-site.sh
-```
-
-It uses stable slugs and updates existing pages/posts rather than creating
-duplicates.
-
-That means these are safe to run repeatedly:
-
-```bash
-./start.sh
-./reconfigure.sh
-```
-
-The seed process also removes WordPress's default `Hello world!` post and
-`Sample Page`.
+- The Primary menu is resolved by its `nav_menu` term ID, not by parsing
+  `wp menu list` output. It is reused if it exists, otherwise created with
+  `wp menu create --porcelain`. A page is added only when no item in that
+  exact menu already points to it.
+- The Contact page is created once by `seed-site.sh`; afterwards
+  `configure-plugins.php` owns its content (the enquiry form, or
+  `contact.html` when Contact Form 7 is inactive) and only writes it when it
+  changed.
 
 ### Featured images
 
-The bootstrap tries to import deterministic placeholder images from
-`picsum.photos`.
+Images are imported from `picsum.photos` on a best-effort basis: if the
+service is unreachable, the site still provisions and a later
+`./reconfigure.sh` fills in the missing images. Plugins and themes need
+internet access the first time they are downloaded.
 
-Image import is best-effort: if the machine cannot reach the image service, the
-site still provisions successfully and can be reconciled again later with:
+## Storage
 
-```bash
-./reconfigure.sh
+### Shared WordPress files
+
+This lab avoids NFS, Ceph or Longhorn. `./data/wordpress` on your machine is
+bind-mounted into **all three k3d worker containers** at
+`/var/lib/wordpress-shared`, and Kubernetes exposes that path through an RWX
+`hostPath` PV, so all WordPress pods see the same physical files.
+
+Do not copy this pattern to a real multi-machine cluster: there, identical
+hostPath strings point to different disks.
+
+Each replica's init container prepares the tree before Apache starts:
+
+- The first replica copies WordPress from the image while holding a lock
+  directory; the others wait. A completion marker (`.wordpress-files-ready`) is
+  written only after the copy finishes, so an interrupted copy is retried
+  rather than mistaken for a complete tree. A lock left by a killed pod is
+  removed after 10 minutes, and the script handles the image's stop signal so
+  deleting a pod mid-copy releases the lock.
+- `wp-config.php` and `healthz.php` are copied into the shared tree with mode
+  `0444` instead of being mounted as ConfigMap `subPath` files inside
+  `/var/www/html`, which avoids nested bind-mount failures in containerd/runc.
+
+### File ownership
+
+Apache runs as `www-data`, uid 33 (Debian). The WP-CLI image's `www-data` is
+uid 82 (Alpine), so the bootstrap and inventory Jobs run explicitly as uid/gid
+33. Plugins, themes and media they install stay writable by Apache, and the
+Jobs can write to the shared tree on native Linux Docker, not only on Docker
+Desktop, whose file sharing doesn't enforce container user IDs.
+
+`./reset.sh` deletes the uid-33/root-owned files with a throwaway container
+when your host user can't (native Linux).
+
+### MariaDB named volume
+
+MariaDB persists to the Docker named volume `wordpress-ha-poc-mariadb-data`.
+`k3d.yaml` mounts it only into `server:0` at `/var/lib/mariadb-data`, and the
+`mariadb-data` hostPath PV maps the pod's `/var/lib/mysql` to it.
+
+A named volume lives on Docker's Linux filesystem. A macOS bind mount would
+inherit the host's case-insensitive filesystem and make MariaDB initialize
+with `lower_case_table_names=2`:
+
+```text
+Setting lower_case_table_names=2 because file system for /var/lib/mysql/ is case insensitive
 ```
 
-The plugins and theme also require internet access the first time they are
-downloaded.
+`./start.sh` and `./verify.sh` require `SELECT @@lower_case_table_names;` to
+return `0`.
 
-## Verify the three workers
+### Migrate an existing bind-mounted database
 
-```bash
-kubectl get nodes -L workload
-```
-
-You should see one server node and three worker/agent nodes.
-
-## Verify WordPress placement
+Older revisions stored MariaDB in `./data/mariadb`. Don't raw-copy that
+datadir into the named volume: `lower_case_table_names` is fixed when a
+datadir is initialized, so migrate logically. With the old cluster still
+running:
 
 ```bash
-kubectl get pods \
-  -n wordpress-poc \
-  -l app=wordpress \
-  -o wide
+./migrate-mariadb-to-named-volume.sh     # or: make migrate-db
 ```
 
-The three WordPress pods should have three different values in the `NODE`
-column.
+The helper:
 
-This is enforced with:
+1. checks that the target volume doesn't exist yet
+2. creates a logical SQL dump under `./backups/`
+3. deletes the old k3d cluster and creates a fresh named volume
+4. recreates the lab on it
+5. restores the SQL dump
+6. reconciles WordPress, plugins and content
+7. verifies `@@lower_case_table_names = 0` and runs `./verify.sh`
+
+The SQL backup is kept after a successful migration, and its location is
+printed if any later step fails.
+
+## Health checks
+
+**WordPress** readiness uses `/healthz.php` rather than `/`. The public URL is
+`http://localhost:8080` while pods listen on port 80, so probing `/` can trigger
+WordPress's canonical redirect to port 8080. The endpoint checks that
+PHP/Apache execute the request, MariaDB accepts a connection and the
+`wp_options` table exists. On a fresh database it returns 503 until the
+bootstrap creates the schema, which is why `./start.sh` runs the bootstrap
+before waiting for the replicas. Readiness runs every 10 seconds. Liveness is
+a TCP check, so a database outage makes replicas NotReady instead of
+restarting every web container.
+
+**MariaDB** startup and readiness run an authenticated `SELECT 1` with the
+WordPress account, so a credential problem makes MariaDB NotReady without a
+restart loop. Liveness checks the Unix socket and PID 1 locally: a TCP probe
+would log `Aborted connection ... unauthenticated` every period. A single
+initial startup-probe failure (`Can't connect to server on 127.0.0.1`) is
+expected while the server starts.
+
+**WP-Cron** is disabled on page loads (`DISABLE_WP_CRON`) and triggered
+centrally by the `wordpress-cron` CronJob every 5 minutes. During a rollout
+the Service can briefly have no Ready endpoints, so the Job first waits for
+`http://wordpress/healthz.php` to return 200 (every 5 seconds, up to 5
+minutes), then calls `wp-cron.php` with `--retry-all-errors`. If WordPress
+stays unavailable, the Job fails so the outage stays visible.
+
+Apache gets `ServerName localhost`, which silences `AH00558` (pod IPs aren't
+stable FQDNs).
+
+## Rollouts and disruption
+
+WordPress rolls with `maxUnavailable: 0`, `maxSurge: 1`, a 5-second
+`minReadySeconds` soak and a 5-second `preStop` sleep. Its PDB uses
+`unhealthyPodEvictionPolicy: AlwaysAllow`, so draining a node doesn't
+deadlock on an already-unhealthy pod.
+
+Traefik needs a different strategy. It has three replicas with **required**
+pod anti-affinity, one per worker. The chart's default surge rollout
+(`maxSurge: 1`, `maxUnavailable: 0`) cannot work: when all three workers
+already run a Traefik pod, the surge pod has no legal node. The lab uses:
 
 ```yaml
-topologySpreadConstraints:
-  - maxSkew: 1
-    minDomains: 3
-    topologyKey: kubernetes.io/hostname
-    whenUnsatisfiable: DoNotSchedule
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
 ```
 
-## Verify native Apple Silicon / ARM64
+With the Traefik PDB (`minAvailable: 2`), a rollout goes 3 ready -> remove
+one old pod -> 2 ready -> replacement on the freed worker -> 3 ready, and
+repeats. That keeps one-per-worker placement without deadlocking.
 
-Check the k3d node architectures:
+Images use `imagePullPolicy: IfNotPresent`, so restarting or replacing a pod
+in a running cluster needs no registry access, and failover tests also work
+offline. Floating tags (`wordpress:php8.5-apache`, `wordpress:cli-php8.5`)
+are pulled fresh whenever the cluster is recreated (`./stop.sh && ./start.sh`);
+`./versions.sh` shows the image IDs actually in use.
+
+## Security posture
+
+- The site (`127.0.0.1:8080`) and the Kubernetes API are bound to localhost.
+  The lab ships known credentials, debug settings and deliberately old plugin
+  versions, so it must not be reachable from your network. `./start.sh` warns,
+  and `./verify.sh` fails, if an existing cluster still publishes beyond
+  localhost; recreate it with `./stop.sh && ./start.sh`.
+- The namespace **enforces Pod Security `baseline`** and audits/warns against
+  `restricted`. The WP-CLI Jobs and the WP-Cron Job meet `restricted` (numeric
+  non-root user, no privilege escalation, all capabilities dropped,
+  `RuntimeDefault` seccomp). The stock Apache WordPress and MariaDB images
+  start as root, so they produce `restricted` warnings; the lab shows that gap
+  rather than pretending to comply.
+- Each workload has its own ServiceAccount with API token automount disabled,
+  and gets only the Secrets it needs (e.g. only the bootstrap Job sees the admin
+  password, only MariaDB the root password).
+- Ingress is default-deny. WordPress accepts HTTP only from `kube-system`
+  (Traefik) and pods in its own namespace; MariaDB accepts TCP/3306 only from
+  WordPress and the WP-CLI bootstrap and inventory Jobs. Egress is open, because
+  plugin/theme/image downloads and vulnerability testing need the internet.
+- k3s encrypts Secrets at rest.
+- `DISALLOW_FILE_EDIT` is on, the environment type is `local`, memory limits
+  are explicit, and the debug log is written to `/tmp`, outside the web root.
+
+## Testing
 
 ```bash
-kubectl get nodes   -o custom-columns='NAME:.metadata.name,ARCH:.status.nodeInfo.architecture,OS:.status.nodeInfo.operatingSystem'
+make lint             # static: exec bits, shellcheck, php -l, kustomize + kubeconform
+make verify           # the running lab has the intended shape
+make check            # bootstrap idempotency, file ownership, WP-Cron, inventory
+make test-ha          # delete a WordPress pod while requesting the site
+make test-ingress-ha  # delete a Traefik pod while requesting the site
 ```
 
-On an M4 Pro you should see:
+The failover tests request `http://localhost:8080` once a second while the pod
+is replaced. They fail if any request doesn't get a 2xx/3xx answer, then wait
+for the three replicas to recover and show the new placement. Allow a few
+failed requests with `MAX_FAILED_REQUESTS=2 ./test-ha.sh`.
 
-```text
-ARCH
-arm64
-```
+GitHub Actions (`.github/workflows/ci.yaml`) runs `lint.sh`, then a smoke test
+that creates the lab on a fresh runner and runs `verify.sh`, `check.sh`,
+`test-ha.sh` and `test-ingress-ha.sh`.
 
-Check the actual image used by the WordPress pods:
+To delete a pod by hand:
 
 ```bash
-kubectl get pods   -n wordpress-poc   -l app=wordpress   -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.spec.containers[0].image}{"\n"}{end}'
-```
+kubectl delete pod -n wordpress-poc \
+  "$(kubectl get pods -n wordpress-poc -l app=wordpress -o jsonpath='{.items[0].metadata.name}')"
 
-Expected image:
-
-```text
-wordpress:php8.5-apache
-```
-
-Check PHP directly:
-
-```bash
-kubectl exec   -n wordpress-poc   deployment/wordpress   -- php -v
-```
-
-### Test ingress failover
-
-The bundled k3s Traefik deployment is configured with three replicas, one per
-worker node. Test that layer independently:
-
-```bash
-./test-ingress-ha.sh
-```
-
-This deletes one Traefik pod while repeatedly requesting
-`http://localhost:8080`, then waits for all three ingress replicas to recover.
-
-## Test failover
-
-After completing the WordPress installer:
-
-```bash
-./test-ha.sh
-```
-
-The script:
-
-1. confirms the site is reachable
-2. deletes one WordPress pod
-3. repeatedly requests `http://localhost:8080`
-4. waits for Kubernetes to restore three ready replicas
-5. displays the new pod placement
-
-You can also do it manually:
-
-```bash
-kubectl delete pod \
-  -n wordpress-poc \
-  "$(kubectl get pods -n wordpress-poc -l app=wordpress \
-     -o jsonpath='{.items[0].metadata.name}')"
-```
-
-Immediately check:
-
-```bash
 curl -I http://localhost:8080
 ```
 
 The Service still has the other two WordPress endpoints.
 
-## Watch endpoints
+## Inspecting the lab
+
+The commands below use your current kubectl context, which `./start.sh` sets
+to `k3d-wordpress-ha-poc`.
 
 ```bash
-kubectl get endpointslice \
-  -n wordpress-poc \
-  -l kubernetes.io/service-name=wordpress \
-  -w
+# Nodes and their roles (one server, three workers)
+kubectl get nodes -L workload
+
+# WordPress placement: three different NODE values
+kubectl get pods -n wordpress-poc -l app=wordpress -o wide
+
+# Node architectures
+kubectl get nodes \
+  -o custom-columns='NAME:.metadata.name,ARCH:.status.nodeInfo.architecture,OS:.status.nodeInfo.operatingSystem'
+
+# PHP inside a replica
+kubectl exec -n wordpress-poc deployment/wordpress -c wordpress -- php -v
+
+# Watch endpoints during a failover
+kubectl get endpointslice -n wordpress-poc -l kubernetes.io/service-name=wordpress -w
+
+# Logs from all replicas
+kubectl logs -n wordpress-poc -l app=wordpress --prefix --tail=100
+
+# Everything in the namespace
+kubectl get all,pvc,pdb,ingress -n wordpress-poc
 ```
 
-## Shared files
-
-Install a plugin or upload an image in WordPress, then inspect the same shared
-directory on your host:
+Plugins and uploads appear on the host under `./data/wordpress/wp-content`:
 
 ```bash
 find ./data/wordpress/wp-content -maxdepth 2 -type d
 ```
 
-All WordPress replicas mount this directory.
-
-## Check PHP
-
-```bash
-kubectl exec \
-  -n wordpress-poc \
-  deployment/wordpress \
-  -- php -v
-```
-
-## Logs from all WordPress replicas
+Inside the cluster the site is `http://wordpress.wordpress-poc.svc.cluster.local`.
+For example, to scan it with WPScan from a throwaway pod:
 
 ```bash
-kubectl logs \
-  -n wordpress-poc \
-  -l app=wordpress \
-  --prefix \
-  --tail=100
-```
-
-## Resources
-
-```bash
-kubectl get all,pvc,pdb,ingress \
-  -n wordpress-poc
-```
-
-
-From a pod in the cluster:
-
-```text
-http://wordpress.wordpress-poc.svc.cluster.local
-```
-
-Example:
-
-```bash
+kubectl run wpscan -n wordpress-poc --rm -it --restart=Never \
+  --image=wpscanteam/wpscan -- \
   --url http://wordpress.wordpress-poc.svc.cluster.local \
   --enumerate vp,vt \
   --plugins-detection mixed
 ```
 
-## Stop but preserve data
+## Stop, reset and upgrade
 
 ```bash
 ./stop.sh
 ```
 
-This removes the k3d cluster but preserves:
-
-```text
-./data/wordpress
-Docker volume: wordpress-ha-poc-mariadb-data
-```
-
-Running `./start.sh` again recreates the cluster against the same WordPress
-files and MariaDB Docker volume.
-
-MariaDB intentionally does **not** use `./data/mariadb` anymore. On Docker
-Desktop for macOS, a bind mount inherits host filesystem case behavior and
-MariaDB can initialize with `lower_case_table_names=2`. A Docker named volume
-is stored inside Docker's Linux VM and gives this lab normal Linux
-case-sensitive MariaDB semantics (`lower_case_table_names=0`).
-
-## Migrate an existing bind-mounted MariaDB database
-
-If the cluster was created with an older project revision that used:
-
-```text
-./data/mariadb
-```
-
-do not raw-copy that datadir into the Docker named volume. MariaDB's
-`lower_case_table_names` behavior is selected when the datadir is initialized,
-so a logical migration is the clean way to switch filesystem semantics.
-
-With the old cluster still running:
-
-```bash
-./migrate-mariadb-to-named-volume.sh
-```
-
-or:
-
-```bash
-make migrate-db
-```
-
-The helper:
-
-1. creates a logical SQL dump under `./backups/`
-2. deletes the old k3d cluster
-3. creates a fresh Docker named volume
-4. recreates MariaDB on its Linux filesystem
-5. restores the SQL dump
-6. reconciles WordPress/plugins/content
-7. verifies `@@lower_case_table_names = 0`
-8. runs the normal project verification
-
-The SQL backup is retained after a successful migration.
-
-## Full reset
+This deletes the k3d cluster but keeps `./data/wordpress` and the
+`wordpress-ha-poc-mariadb-data` volume; `./start.sh` recreates the same site.
 
 ```bash
 ./reset.sh
 ```
 
-This deletes:
+This deletes the cluster, the WordPress files, the MariaDB volume and any
+legacy `./data/mariadb`, then starts a fresh lab. `./backups/` is kept.
 
-- the k3d cluster
-- WordPress shared files
-- the MariaDB Docker named volume
-- any legacy `./data/mariadb` directory
+Runtime data (`data/`, `backups/`, `reports/`) is ignored by Git.
 
-and starts a fresh environment. Files under `./backups/` are intentionally
-preserved.
+**Upgrading from an older revision:** run `./stop.sh && ./start.sh` once. A
+cluster's published ports can't change in place, so this is what moves the site
+to `127.0.0.1`. Your data is kept: the init container adopts the existing
+WordPress tree, adds any missing core files without overwriting updates, and
+resets ownership to uid 33.
 
-## PoC credentials
+## Intentional trade-offs
 
-The manifest intentionally contains simple database passwords.
+- MariaDB is a single instance and the largest remaining application SPOF.
+- k3d has one control-plane server and one host-facing load-balancer
+  container: acceptable local-lab constraints, not production HA.
+- Shared WordPress storage is a host bind mount, fine for one machine but not
+  a multi-node storage design.
+- Egress is open for plugin/theme/image bootstrap and vulnerability testing.
+- The official Apache WordPress image is kept for familiarity and plugin
+  compatibility, rather than a heavily hardened custom image.
 
-Do not use these values or this Secret-management approach in production.
+For production, the next substantial changes would be an HA managed or
+clustered database, production RWX/object storage for media, immutable
+application images for plugin/theme code, TLS and stricter egress controls.
+
+## Troubleshooting
+
+- **Bootstrap failed**: `./start.sh` and `./reconfigure.sh` print the Job's
+  logs and stop. Fix the cause (often network access to wordpress.org) and run
+  `./reconfigure.sh`.
+- **A WordPress pod waits in `Init`** with "Another pod is preparing the shared
+  WordPress files": another replica is copying. A lock left by a killed pod is
+  cleared automatically after 10 minutes.
+- **`./verify.sh` says the site is published beyond localhost**: the cluster
+  predates the localhost binding; run `./stop.sh && ./start.sh`.
+- **`./start.sh` reports an unexpected MariaDB mount**: the cluster came from a
+  revision that used `./data/mariadb`; see
+  [Migrate an existing bind-mounted database](#migrate-an-existing-bind-mounted-database).

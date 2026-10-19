@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # shellcheck, php and kubectl are preinstalled on the runner image.
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz |
+            sudo tar -xz -C /usr/local/bin kubeconform
+
+      - name: Lint
+        run: LINT_STRICT=1 ./lint.sh
+
+  smoke:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install k3d
+        run: curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.8.3 bash
+
+      - name: Start the lab
+        run: ./start.sh
+
+      - name: Verify
+        run: ./verify.sh
+
+      - name: Runtime checks
+        run: ./check.sh
+
+      - name: WordPress pod failover
+        run: ./test-ha.sh
+
+      - name: Ingress pod failover
+        run: ./test-ingress-ha.sh
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          set +e
+          kubectl get nodes -o wide
+          kubectl get all,pvc,pdb,ingress,networkpolicy -n wordpress-poc -o wide
+          kubectl get pods -n kube-system -o wide
+          kubectl describe pods -n wordpress-poc
+          kubectl get events -A --sort-by=.lastTimestamp | tail -n 80
+          for pod in $(kubectl get pods -n wordpress-poc -o name); do
+            echo "::group::logs $pod"
+            kubectl logs -n wordpress-poc "$pod" --all-containers=true --prefix --tail=200
+            echo "::endgroup::"
+          done
+
+      - name: Stop the lab
+        if: always()
+        run: ./stop.sh || true

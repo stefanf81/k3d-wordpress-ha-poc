@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wordpress-poc
+
+resources:
+  - wordpress.yaml
+
+configMapGenerator:
+  # The generated name carries a content hash, so editing any of these files
+  # and re-running ./start.sh rolls the WordPress Deployment.
+  - name: wordpress-config
+    files:
+      - wp-config.php
+      - healthz.php
+      - init-shared-files.sh
+  - name: wordpress-cron
+    files:
+      - wp-cron.sh

@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wordpress-poc
+
+resources:
+  - job.yaml
+
+# The Job is recreated on every ./start.sh and ./reconfigure.sh run, so
+# stable ConfigMap names are enough.
+configMapGenerator:
+  # Site settings, loaded into the Job's environment.
+  - name: wordpress-bootstrap-settings
+    envs:
+      - site.env
+    options:
+      disableNameSuffixHash: true
+  # Scripts, plugin pins and page content, mounted at /bootstrap.
+  - name: wordpress-bootstrap
+    files:
+      - wp-cli.sh
+      - seed-site.sh
+      - configure-plugins.php
+      - after-install.sh
+      - plugins.txt
+      - contact.html
+    options:
+      disableNameSuffixHash: true

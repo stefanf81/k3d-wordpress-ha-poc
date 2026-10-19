@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
+# Re-runs the WP-CLI bootstrap (core, plugins, content, settings) without
+# rebuilding the cluster or restarting the WordPress replicas.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-kubectl config use-context k3d-wordpress-ha-poc >/dev/null
+require_cluster
 
 echo "Re-running WordPress/plugin bootstrap..."
-kubectl delete job wordpress-bootstrap \
-  -n wordpress-poc \
-  --ignore-not-found=true >/dev/null
-
-kubectl apply -f "$ROOT_DIR/k8s/bootstrap.yaml"
-
-kubectl wait \
-  --for=condition=complete \
-  job/wordpress-bootstrap \
-  -n wordpress-poc \
-  --timeout=600s
-
-kubectl logs -n wordpress-poc job/wordpress-bootstrap
+run_bootstrap

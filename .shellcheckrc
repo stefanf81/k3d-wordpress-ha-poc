@@ -1,0 +1,3 @@
+# The scripts pass single-quoted code to shells inside pods and to php -r;
+# those variables are meant to expand there, not locally.
+disable=SC2016

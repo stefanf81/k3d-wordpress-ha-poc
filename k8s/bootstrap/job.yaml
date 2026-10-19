@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wordpress-bootstrap
+  namespace: wordpress-poc
+spec:
+  backoffLimit: 6
+  # lib.sh waits slightly longer than this, so the Job's own deadline is what
+  # reports a hung bootstrap.
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app: wordpress-bootstrap
+    spec:
+      serviceAccountName: wordpress-bootstrap
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        workload: wordpress
+      securityContext:
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wp-cli
+          image: wordpress:cli-php8.5
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - /bootstrap/wp-cli.sh
+          envFrom:
+            - secretRef:
+                name: wordpress-database
+            - secretRef:
+                name: wordpress-keys
+            - secretRef:
+                name: wordpress-admin
+            - configMapRef:
+                name: wordpress-bootstrap-settings
+          env:
+            # uid 33 has no home directory in the Alpine-based CLI image.
+            - name: HOME
+              value: /tmp
+          # The CLI image's www-data is uid 82 (Alpine) and is declared by
+          # name, which runAsNonRoot cannot verify. Run as uid 33, the Debian
+          # www-data that owns the shared WordPress files, so plugin, theme
+          # and media writes succeed and Apache can still modify them.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 33
+            runAsGroup: 33
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: wordpress-shared
+              mountPath: /var/www/html
+            - name: bootstrap
+              mountPath: /bootstrap
+              readOnly: true
+      volumes:
+        - name: wordpress-shared
+          persistentVolumeClaim:
+            claimName: wordpress-shared
+        - name: bootstrap
+          configMap:
+            name: wordpress-bootstrap
+            defaultMode: 0755

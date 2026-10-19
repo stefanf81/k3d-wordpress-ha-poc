@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
+# Prints the tool, Kubernetes, image and application versions in use,
+# including the immutable image IDs behind floating tags.
 set -euo pipefail
 
-NS="wordpress-poc"
-MARIADB_DATA_VOLUME="${MARIADB_DATA_VOLUME:-wordpress-ha-poc-mariadb-data}"
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+require_commands docker k3d
+require_cluster
 
 echo "=== Local tooling ==="
 k3d version
 echo
-kubectl version --client
+command kubectl version --client
 echo
 
 echo "=== Kubernetes / k3s ==="
@@ -18,7 +23,10 @@ kubectl get nodes \
 echo
 
 echo "=== Traefik ingress ==="
-kubectl get pods   -n kube-system   -l app.kubernetes.io/name=traefik   -o custom-columns='POD:.metadata.name,NODE:.spec.nodeName,IMAGE:.spec.containers[0].image,IMAGE_ID:.status.containerStatuses[0].imageID'
+kubectl get pods \
+  -n kube-system \
+  -l app.kubernetes.io/name=traefik \
+  -o custom-columns='POD:.metadata.name,NODE:.spec.nodeName,IMAGE:.spec.containers[0].image,IMAGE_ID:.status.containerStatuses[0].imageID'
 echo
 
 echo "=== Pod images and immutable image IDs ==="
@@ -40,20 +48,9 @@ echo
 echo "=== MariaDB storage ==="
 docker volume inspect "$MARIADB_DATA_VOLUME" \
   --format 'Name={{.Name}} Driver={{.Driver}} Mountpoint={{.Mountpoint}}'
-kubectl exec -n "$NS" deployment/mariadb -- \
-  /bin/sh -ec '
-    mariadb \
-      --protocol=tcp \
-      --host=127.0.0.1 \
-      --user="$MARIADB_USER" \
-      --password="$MARIADB_PASSWORD" \
-      "$MARIADB_DATABASE" \
-      --batch \
-      --skip-column-names \
-      --execute="SELECT CONCAT(\"lower_case_table_names=\", @@lower_case_table_names);"
-  '
+echo "lower_case_table_names=$(mariadb_query 'SELECT @@lower_case_table_names;')"
 echo
 
 echo "=== Managed plugins ==="
-kubectl logs -n "$NS" job/wordpress-bootstrap | \
+kubectl logs -n "$NS" job/wordpress-bootstrap |
   sed -n '/Installed plugins:/,$p'
