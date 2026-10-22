@@ -12,7 +12,16 @@
   CLUSTER_NAME="wordpress-ha-poc"
   KUBE_CONTEXT="k3d-${CLUSTER_NAME}"
   NS="wordpress-poc"
-  SITE_URL="http://localhost:8080"
+
+  # The site address comes from the same file WordPress reads, so the lab
+  # scripts and the installed site cannot disagree. SITE_PORT feeds the k3d
+  # port mapping in k3d.yaml.
+  SITE_URL="$(sed -n 's/^SITE_URL=//p' "$ROOT_DIR/k8s/bootstrap/site.env")"
+  [ -n "$SITE_URL" ] || {
+    echo "ERROR: SITE_URL is missing from k8s/bootstrap/site.env" >&2
+    exit 1
+  }
+  SITE_PORT="${SITE_URL##*:}"
 
   # Pin the node runtime so k3s doesn't change underneath the lab. Override,
   # e.g.: K3S_IMAGE=rancher/k3s:<version> ./start.sh
@@ -28,6 +37,11 @@
 
 die() {
   echo "ERROR: $*" >&2
+  exit 1
+}
+
+fail() {
+  echo "FAIL: $*" >&2
   exit 1
 }
 
@@ -51,6 +65,21 @@ require_cluster() {
   require_commands kubectl
   command kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT" ||
     die "kubectl context '$KUBE_CONTEXT' not found. Run ./start.sh first."
+}
+
+# Prints "<type>|<volume>|<source>" for the MariaDB mount on the k3d server
+# node, or nothing if the container or mount is missing.
+mariadb_mount_on_server() {
+  docker inspect "k3d-${CLUSTER_NAME}-server-0" \
+    --format '{{range .Mounts}}{{if eq .Destination "/var/lib/mariadb-data"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}' \
+    2>/dev/null || true
+}
+
+# Prints the load balancer's published HTTP bindings that are not on
+# 127.0.0.1. The lab must never be reachable from the network.
+published_beyond_localhost() {
+  docker port "k3d-${CLUSTER_NAME}-serverlb" 80/tcp 2>/dev/null |
+    grep -v '^127\.0\.0\.1:' || true
 }
 
 # Runs one SQL statement inside the MariaDB pod as the WordPress user and
@@ -103,10 +132,22 @@ wait_for_job() {
   return 1
 }
 
+# The WP-CLI Jobs mount wp-config.php from a ConfigMap built from the same file
+# the WordPress Deployment mounts. Kustomize cannot share one file between
+# kustomizations, so the script applies it before each Job runs.
+apply_wp_config_configmap() {
+  kubectl create configmap wordpress-wp-config \
+    -n "$NS" \
+    --from-file=wp-config.php="$ROOT_DIR/k8s/wordpress/wp-config.php" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+}
+
 # Replaces the WP-CLI bootstrap Job and waits for it. A finished Job never
 # runs again, so it is recreated on every reconcile. Foreground deletion
 # makes sure an older bootstrap pod is gone before the new one starts.
 run_bootstrap() {
+  apply_wp_config_configmap
+
   kubectl delete job wordpress-bootstrap \
     -n "$NS" \
     --ignore-not-found=true \

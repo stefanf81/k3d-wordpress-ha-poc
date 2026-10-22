@@ -3,6 +3,13 @@ set -eu
 
 cd /var/www/html
 
+# Seeding writes only core tables. Skipping plugin and theme loading keeps each
+# of the ~200 wp calls below from booting every active plugin.
+# configure-plugins.php runs later, with everything loaded.
+wp() {
+  command wp --skip-plugins --skip-themes "$@"
+}
+
 log() {
   printf '\n==> %s\n' "$*"
 }
@@ -376,53 +383,63 @@ wp option update wp_page_for_privacy_policy "$PRIVACY_ID" >/dev/null
 
 log "Reconciling classic Primary menu fallback"
 
-# wp menu list supports --fields, not --field. More importantly, avoid parsing
-# human-oriented command output entirely: resolve the nav_menu term ID directly
-# from WordPress' taxonomy tables, then use that stable ID for all operations.
-db_prefix="$(wp db prefix)"
+# Core's menu API rather than raw SQL. A failed query used to look like "no
+# menu yet" and created a duplicate menu, so errors here must stop the run.
+# Repeated runs are idempotent: existing pages are detected and skipped.
+cat >"$tmpdir/primary-menu.php" <<'EOF'
+<?php
+// Usage: wp eval-file primary-menu.php <page-id>...
+// Creates the Primary menu if needed, then adds each listed page that is not
+// already in it.
+$menu = wp_get_nav_menu_object( 'Primary' );
 
-PRIMARY_MENU_ID="$(
-  wp db query \
-    "SELECT t.term_id
-       FROM ${db_prefix}terms t
-       JOIN ${db_prefix}term_taxonomy tt
-         ON tt.term_id = t.term_id
-      WHERE tt.taxonomy = 'nav_menu'
-        AND t.name = 'Primary'
-      ORDER BY t.term_id
-      LIMIT 1;" \
-    --skip-column-names 2>/dev/null || true
-)"
+if ( $menu ) {
+	$menu_id = (int) $menu->term_id;
+	WP_CLI::log( "Reusing Primary menu (term ID: $menu_id)." );
+} else {
+	$menu_id = wp_create_nav_menu( 'Primary' );
 
-if [ -z "$PRIMARY_MENU_ID" ]; then
-  echo "Creating Primary menu..."
-  PRIMARY_MENU_ID="$(wp menu create "Primary" --porcelain)"
-else
-  echo "Reusing Primary menu (term ID: $PRIMARY_MENU_ID)."
-fi
+	if ( is_wp_error( $menu_id ) ) {
+		WP_CLI::error( $menu_id->get_error_message() );
+	}
 
-for page_id in "$HOME_ID" "$SERVICES_ID" "$CASE_ID" "$ABOUT_ID" "$INSIGHTS_ID" "$CONTACT_ID"; do
-  # Check the nav_menu_item's _menu_item_object_id inside this exact menu term.
-  # This makes repeated bootstrap/reconfigure runs fully idempotent.
-  exists="$(
-    wp db query \
-      "SELECT COUNT(*)
-         FROM ${db_prefix}postmeta pm
-         JOIN ${db_prefix}term_relationships tr
-           ON tr.object_id = pm.post_id
-         JOIN ${db_prefix}term_taxonomy tt
-           ON tt.term_taxonomy_id = tr.term_taxonomy_id
-        WHERE pm.meta_key = '_menu_item_object_id'
-          AND pm.meta_value = '${page_id}'
-          AND tt.taxonomy = 'nav_menu'
-          AND tt.term_id = ${PRIMARY_MENU_ID};" \
-      --skip-column-names 2>/dev/null || echo 0
-  )"
+	WP_CLI::log( 'Creating Primary menu...' );
+}
 
-  if [ "$exists" = "0" ]; then
-    wp menu item add-post "$PRIMARY_MENU_ID" "$page_id" >/dev/null
-  fi
-done
+$in_menu = array();
+
+foreach ( (array) wp_get_nav_menu_items( $menu_id, array( 'post_status' => 'any' ) ) as $item ) {
+	if ( 'post_type' === $item->type ) {
+		$in_menu[ (int) $item->object_id ] = true;
+	}
+}
+
+foreach ( $args as $page_id ) {
+	$page_id = (int) $page_id;
+
+	if ( isset( $in_menu[ $page_id ] ) ) {
+		continue;
+	}
+
+	$item_id = wp_update_nav_menu_item(
+		$menu_id,
+		0,
+		array(
+			'menu-item-object-id' => $page_id,
+			'menu-item-object'    => 'page',
+			'menu-item-type'      => 'post_type',
+			'menu-item-status'    => 'publish',
+		)
+	);
+
+	if ( is_wp_error( $item_id ) ) {
+		WP_CLI::error( $item_id->get_error_message() );
+	}
+}
+EOF
+
+wp eval-file "$tmpdir/primary-menu.php" \
+  "$HOME_ID" "$SERVICES_ID" "$CASE_ID" "$ABOUT_ID" "$INSIGHTS_ID" "$CONTACT_ID"
 
 log "Creating realistic articles"
 

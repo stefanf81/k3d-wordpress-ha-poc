@@ -30,7 +30,8 @@ are bound to `127.0.0.1` only, so nothing is published on your network.
 ## Requirements
 
 - Docker: Docker Desktop on macOS/Windows, or Docker Engine on Linux
-- [k3d](https://k3d.io) v5
+- [k3d](https://k3d.io) v5.8.3, the version CI tests. `k3d.yaml` uses the
+  `k3d.io/v1alpha5` config API, so use a 5.x release that supports it.
 - kubectl
 - curl
 
@@ -132,7 +133,9 @@ Scripts, PHP and page content are real files. Kustomize's
 can be linted, diffed and reviewed like any other code. The WordPress
 ConfigMap name carries a content hash: editing `wp-config.php`,
 `healthz.php` or the init script and re-running `./start.sh` rolls the
-WordPress Deployment.
+WordPress Deployment. Each replica mounts its own copy of the config, so
+replicas still running the previous revision keep the config they started
+with until they are replaced.
 
 ## Configuration
 
@@ -285,10 +288,11 @@ Everything is keyed by stable slugs and updated in place, so `./start.sh` and
 `./reconfigure.sh` are safe to repeat; `make check` verifies that a repeated
 bootstrap changes no content counts.
 
-- The Primary menu is resolved by its `nav_menu` term ID, not by parsing
-  `wp menu list` output. It is reused if it exists, otherwise created with
-  `wp menu create --porcelain`. A page is added only when no item in that
-  exact menu already points to it.
+- The Primary menu is managed through WordPress' menu API (`wp eval-file`
+  calling `wp_get_nav_menu_object` and `wp_update_nav_menu_item`), not raw SQL.
+  It is reused if it exists, otherwise created. A page is added only when no
+  item in that exact menu already points to it. A failed lookup stops the
+  bootstrap instead of creating a duplicate menu.
 - The Contact page is created once by `seed-site.sh`; afterwards
   `configure-plugins.php` owns its content (the enquiry form, or
   `contact.html` when Contact Form 7 is inactive) and only writes it when it
@@ -315,15 +319,23 @@ hostPath strings point to different disks.
 
 Each replica's init container prepares the tree before Apache starts:
 
-- The first replica copies WordPress from the image while holding a lock
-  directory; the others wait. A completion marker (`.wordpress-files-ready`) is
-  written only after the copy finishes, so an interrupted copy is retried
-  rather than mistaken for a complete tree. A lock left by a killed pod is
-  removed after 10 minutes, and the script handles the image's stop signal so
-  deleting a pod mid-copy releases the lock.
-- `wp-config.php` and `healthz.php` are copied into the shared tree with mode
-  `0444` instead of being mounted as ConfigMap `subPath` files inside
-  `/var/www/html`, which avoids nested bind-mount failures in containerd/runc.
+- The first replica copies WordPress from the image while holding an `flock(1)`
+  lock on `.wordpress-files.lock`; the others wait. The kernel releases the lock
+  when its holder exits or is killed, so no stale-lock cleanup is needed. A
+  completion marker (`.wordpress-files-ready`) is written only after the copy
+  finishes, so an interrupted copy is retried rather than mistaken for a
+  complete tree. The script handles the image's stop signal, so deleting a pod
+  mid-copy exits promptly.
+- Config is not copied into the shared tree. `wp-config.php` is mounted at
+  `/var/www/wp-config.php`, one level above the WordPress root, where
+  WordPress and WP-CLI look for it when the root has none. `healthz.php` is
+  served by an Apache alias to the read-only ConfigMap mount at `/config`.
+  Both mounts sit outside the shared volume. Those `subPath`/alias mounts are
+  not yet verified on a live cluster: run `./start.sh` and `./verify.sh` after
+  changing them.
+- Older revisions copied `wp-config.php` and `healthz.php` into the shared
+  tree. `./start.sh` removes those copies after the rollout, because a copy
+  there would take precedence over the per-pod mount.
 
 ### File ownership
 
@@ -581,8 +593,8 @@ application images for plugin/theme code, TLS and stricter egress controls.
   logs and stop. Fix the cause (often network access to wordpress.org) and run
   `./reconfigure.sh`.
 - **A WordPress pod waits in `Init`** with "Another pod is preparing the shared
-  WordPress files": another replica is copying. A lock left by a killed pod is
-  cleared automatically after 10 minutes.
+  WordPress files": another replica holds the `flock` lock and is copying. The
+  waiting pod continues once that replica exits.
 - **`./verify.sh` says the site is published beyond localhost**: the cluster
   predates the localhost binding; run `./stop.sh && ./start.sh`.
 - **`./start.sh` reports an unexpected MariaDB mount**: the cluster came from a

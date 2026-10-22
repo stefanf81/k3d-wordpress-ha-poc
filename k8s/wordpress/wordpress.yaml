@@ -6,7 +6,9 @@ metadata:
 spec:
   replicas: 3
   minReadySeconds: 5
-  progressDeadlineSeconds: 300
+  # Replicas stay NotReady until the WP-CLI bootstrap creates the schema, which
+  # can take up to BOOTSTRAP_TIMEOUT (960s in lib.sh). The deadline must outlast it.
+  progressDeadlineSeconds: 1200
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
@@ -59,14 +61,17 @@ spec:
           image: wordpress:php8.5-apache
           imagePullPolicy: IfNotPresent
           # The image entrypoint would generate its own wp-config.php; the
-          # init container already installed ours, so start Apache directly.
+          # config is mounted below instead, so start Apache directly.
           # ServerName silences AH00558 (pod IPs are not stable FQDNs).
+          # healthz.php is aliased from the ConfigMap, not copied into the
+          # shared tree, so each replica keeps the version it was started with.
           command:
             - /bin/sh
             - -ec
             - |
               printf 'ServerName localhost\n' > /etc/apache2/conf-available/servername.conf
-              a2enconf servername >/dev/null
+              printf 'Alias /healthz.php /config/healthz.php\n<Directory /config>\n    Require all granted\n</Directory>\n' > /etc/apache2/conf-available/healthz.conf
+              a2enconf servername healthz >/dev/null
               exec apache2-foreground
           ports:
             - name: http
@@ -114,6 +119,16 @@ spec:
           volumeMounts:
             - name: wordpress-shared
               mountPath: /var/www/html
+            # WordPress loads wp-config.php from the parent of its root when
+            # the root has none. This path is outside the RWX mount, so it is
+            # per-pod: a later rollout cannot change config under older replicas.
+            - name: wordpress-config
+              mountPath: /var/www/wp-config.php
+              subPath: wp-config.php
+              readOnly: true
+            - name: wordpress-config
+              mountPath: /config
+              readOnly: true
       volumes:
         - name: wordpress-shared
           persistentVolumeClaim:

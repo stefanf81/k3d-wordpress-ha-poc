@@ -1,0 +1,5 @@
+# Loaded through WP_CLI_CONFIG_PATH (see job.yaml). Without apache_modules,
+# `wp rewrite structure --hard` assumes mod_rewrite is absent and never writes
+# the .htaccess that pretty permalinks need under Apache.
+apache_modules:
+  - mod_rewrite

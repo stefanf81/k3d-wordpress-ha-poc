@@ -19,6 +19,7 @@ configMapGenerator:
   - name: wordpress-bootstrap
     files:
       - wp-cli.sh
+      - wp-cli.yml
       - seed-site.sh
       - configure-plugins.php
       - after-install.sh

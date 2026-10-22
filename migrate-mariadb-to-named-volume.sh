@@ -12,10 +12,10 @@ require_commands docker k3d kubectl curl
 cluster_exists || die "No '$CLUSTER_NAME' cluster was found.
 This helper migrates an existing bind-mounted MariaDB database."
 
-current_mount="$(
-  docker inspect "k3d-${CLUSTER_NAME}-server-0" \
-    --format '{{range .Mounts}}{{if eq .Destination "/var/lib/mariadb-data"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}'
-)"
+current_mount="$(mariadb_mount_on_server)"
+# An empty result would otherwise look like "not migrated yet" and lead to a
+# cluster delete.
+[ -n "$current_mount" ] || die "k3d server node container not found; refusing to continue."
 
 if [[ "$current_mount" == "volume|${MARIADB_DATA_VOLUME}|"* ]]; then
   echo "MariaDB already uses Docker named volume '$MARIADB_DATA_VOLUME'."

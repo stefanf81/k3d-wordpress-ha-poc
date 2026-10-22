@@ -9,11 +9,6 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 require_commands docker curl
 require_cluster
 
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
-
 echo "Checking Kubernetes nodes..."
 workers="$(kubectl get nodes -l workload=wordpress --no-headers | wc -l | tr -d ' ')"
 [ "$workers" = "3" ] || fail "expected 3 WordPress workers, found $workers"
@@ -21,9 +16,9 @@ workers="$(kubectl get nodes -l workload=wordpress --no-headers | wc -l | tr -d 
 echo "Checking that the site is published on localhost only..."
 lb_bindings="$(docker port "k3d-${CLUSTER_NAME}-serverlb" 80/tcp 2>/dev/null || true)"
 [ -n "$lb_bindings" ] || fail "k3d load balancer does not publish port 80"
-if grep -qv '^127\.0\.0\.1:' <<<"$lb_bindings"; then
-  fail "site is published beyond localhost ($(tr '\n' ' ' <<<"$lb_bindings")); recreate with ./stop.sh && ./start.sh"
-fi
+exposed="$(published_beyond_localhost)"
+[ -z "$exposed" ] ||
+  fail "site is published beyond localhost ($(tr '\n' ' ' <<<"$exposed")); recreate with ./stop.sh && ./start.sh"
 
 echo "Checking Traefik HA..."
 traefik_available="$(
@@ -60,12 +55,9 @@ echo "Checking MariaDB Docker named volume..."
 docker volume inspect "$MARIADB_DATA_VOLUME" >/dev/null 2>&1 ||
   fail "Docker volume $MARIADB_DATA_VOLUME does not exist"
 
-server_mount="$(
-  docker inspect "k3d-${CLUSTER_NAME}-server-0" \
-    --format '{{range .Mounts}}{{if eq .Destination "/var/lib/mariadb-data"}}{{.Type}}|{{.Name}}{{end}}{{end}}'
-)" || fail "k3d server node container not found"
-[ "$server_mount" = "volume|$MARIADB_DATA_VOLUME" ] ||
-  fail "server node MariaDB mount is '$server_mount', expected volume|$MARIADB_DATA_VOLUME"
+server_mount="$(mariadb_mount_on_server)"
+[[ "$server_mount" == "volume|${MARIADB_DATA_VOLUME}|"* ]] ||
+  fail "server node MariaDB mount is '${server_mount:-<not found>}', expected volume|$MARIADB_DATA_VOLUME"
 
 lower_case_table_names="$(mariadb_query 'SELECT @@lower_case_table_names;')" ||
   fail "could not query MariaDB"
@@ -113,8 +105,20 @@ case "$code" in
   *) fail "WordPress returned HTTP $code" ;;
 esac
 
+# The homepage alone cannot show that pretty permalinks work. A page with a
+# pretty URL needs the .htaccess rewrite rules that WP-CLI writes.
+echo "Checking pretty permalinks..."
+code="$(
+  curl --silent --location --output /dev/null --write-out '%{http_code}' \
+    --max-time 15 "$SITE_URL/contact/" || true
+)"
+[ "$code" = "200" ] || fail "pretty permalink /contact/ returned HTTP $code; check the .htaccess rewrite rules"
+
+# Load WordPress as www-data (uid 33), the user Apache runs as, so this check
+# cannot leave root-owned files in the shared tree.
 echo "Checking WordPress database connectivity..."
 kubectl exec -n "$NS" deployment/wordpress -c wordpress -- \
+  setpriv --reuid=33 --regid=33 --clear-groups \
   php -r '
     require "/var/www/html/wp-load.php";
     global $wpdb;

@@ -12,11 +12,6 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_cluster
 
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
-
 # Pinned "slug version" pairs from plugins.txt (blank lines, comments and
 # @latest entries skipped).
 pinned_plugins() {

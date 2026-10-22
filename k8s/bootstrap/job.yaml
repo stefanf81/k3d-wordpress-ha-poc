@@ -43,6 +43,9 @@ spec:
             # uid 33 has no home directory in the Alpine-based CLI image.
             - name: HOME
               value: /tmp
+            # Lets WP-CLI write .htaccess for pretty permalinks under Apache.
+            - name: WP_CLI_CONFIG_PATH
+              value: /bootstrap/wp-cli.yml
           # The CLI image's www-data is uid 82 (Alpine) and is declared by
           # name, which runAsNonRoot cannot verify. Run as uid 33, the Debian
           # www-data that owns the shared WordPress files, so plugin, theme
@@ -65,6 +68,12 @@ spec:
           volumeMounts:
             - name: wordpress-shared
               mountPath: /var/www/html
+            # One level above the WordPress root, where WordPress and WP-CLI
+            # look for wp-config.php. lib.sh creates this ConfigMap on each run.
+            - name: wordpress-wp-config
+              mountPath: /var/www/wp-config.php
+              subPath: wp-config.php
+              readOnly: true
             - name: bootstrap
               mountPath: /bootstrap
               readOnly: true
@@ -72,6 +81,9 @@ spec:
         - name: wordpress-shared
           persistentVolumeClaim:
             claimName: wordpress-shared
+        - name: wordpress-wp-config
+          configMap:
+            name: wordpress-wp-config
         - name: bootstrap
           configMap:
             name: wordpress-bootstrap

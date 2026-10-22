@@ -174,8 +174,13 @@ if ( $contact_page ) {
 		$contact_content = trim( (string) file_get_contents( '/bootstrap/contact.html' ) );
 	}
 
+	// Compare with what WordPress would store. content_save_pre applies kses
+	// filtering when the current user lacks unfiltered_html (always true under
+	// WP-CLI), so comparing the raw source would always differ.
+	$stored_content = apply_filters( 'content_save_pre', $contact_content );
+
 	// Leave an unchanged page alone so repeated runs don't touch it.
-	if ( $contact_page->post_content !== $contact_content ) {
+	if ( $contact_page->post_content !== $stored_content ) {
 		wp_update_post(
 			array(
 				'ID'           => $contact_page->ID,

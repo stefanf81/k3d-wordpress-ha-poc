@@ -68,6 +68,12 @@ spec:
           volumeMounts:
             - name: wordpress-shared
               mountPath: /var/www/html
+            # One level above the WordPress root. lib.sh creates this ConfigMap
+            # before the Job is applied.
+            - name: wordpress-wp-config
+              mountPath: /var/www/wp-config.php
+              subPath: wp-config.php
+              readOnly: true
             - name: scripts
               mountPath: /scripts
               readOnly: true
@@ -75,6 +81,9 @@ spec:
         - name: wordpress-shared
           persistentVolumeClaim:
             claimName: wordpress-shared
+        - name: wordpress-wp-config
+          configMap:
+            name: wordpress-wp-config
         - name: scripts
           configMap:
             name: wordpress-inventory

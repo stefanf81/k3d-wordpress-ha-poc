@@ -10,7 +10,7 @@ agents: 3
 
 # start.sh exports these variables (defaults live in lib.sh); k3d expands
 # them. Override K3S_IMAGE to test a different k3s release without editing
-# this file.
+# this file. SITE_PORT comes from SITE_URL in k8s/bootstrap/site.env.
 image: ${K3S_IMAGE}
 
 # Only reachable from this machine: the lab ships known admin credentials and
@@ -18,9 +18,9 @@ image: ${K3S_IMAGE}
 kubeAPI:
   hostIP: "127.0.0.1"
 
-# http://localhost:8080 -> k3d load balancer -> Traefik.
+# SITE_URL (localhost) -> k3d load balancer -> Traefik.
 ports:
-  - port: 127.0.0.1:8080:80
+  - port: 127.0.0.1:${SITE_PORT}:80
     nodeFilters:
       - loadbalancer
 

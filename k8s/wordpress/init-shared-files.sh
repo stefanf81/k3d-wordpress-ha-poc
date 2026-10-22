@@ -1,21 +1,20 @@
 #!/bin/sh
 # Prepares the shared WordPress tree before Apache starts. Every replica runs
-# this, so the one-time copy is serialised with a lock directory on the
-# shared volume.
+# this. The one-time copy runs under an flock(1) lock on the shared volume.
+# The kernel releases the lock when its holder exits or is killed, so there is
+# no stale-lock state to detect or race over.
 set -eu
 
 SHARED=/shared
 # Written only after the copy and chown finish, so an interrupted copy is
 # retried instead of being mistaken for a complete tree.
 MARKER="$SHARED/.wordpress-files-ready"
-LOCK="$SHARED/.bootstrap-lock"
-# A lock older than this was left behind by a pod killed mid-copy.
-LOCK_STALE_MINUTES=10
+LOCK="$SHARED/.wordpress-files.lock"
 
 # As PID 1 the shell ignores stop signals unless it installs a handler. The
 # image's STOPSIGNAL is SIGWINCH (graceful Apache stop), so trap that as well
-# as TERM: exiting runs the EXIT trap, so deleting the pod mid-copy releases
-# the lock.
+# as TERM. A trap runs only after the foreground command finishes, so the copy
+# runs in the background and is waited for; a stop signal then exits at once.
 trap 'exit 143' TERM INT WINCH
 
 copy_wordpress_files() {
@@ -34,35 +33,31 @@ copy_wordpress_files() {
   touch "$MARKER"
 }
 
-until [ -f "$MARKER" ]; do
-  if mkdir "$LOCK" 2>/dev/null; then
-    trap 'rm -rf "$LOCK"' EXIT
-    [ -f "$MARKER" ] || copy_wordpress_files
-    rm -rf "$LOCK"
-    trap - EXIT
-  elif [ -n "$(find "$LOCK" -maxdepth 0 -mmin +"$LOCK_STALE_MINUTES" 2>/dev/null)" ]; then
-    echo "Removing a stale lock left by an interrupted pod..."
-    rm -rf "$LOCK"
-  else
-    echo "Another pod is preparing the shared WordPress files; waiting..."
-    sleep 2
-  fi
+# Fails, rather than waiting forever, when the shared volume is read-only or full.
+exec 9>"$LOCK" || {
+  echo "ERROR: cannot open $LOCK" >&2
+  exit 1
+}
+
+# Poll instead of blocking in flock: a blocked foreground command would delay
+# a stop signal until the lock is free.
+until flock -n 9; do
+  echo "Another pod is preparing the shared WordPress files; waiting..."
+  sleep 2
 done
+
+if [ ! -f "$MARKER" ]; then
+  # The copy's subshell closes the lock descriptor first. Otherwise it would
+  # keep the lock after this script exits. The container's PID 1 ends the
+  # copy with it, so no copy outlives the lock.
+  (
+    exec 9>&-
+    copy_wordpress_files
+  ) &
+  copy_pid=$!
+  wait "$copy_pid"
+fi
+exec 9>&-
 
 test -f "$SHARED/wp-includes/version.php"
 mkdir -p "$SHARED/wp-content/mu-plugins"
-
-# Avoid nested ConfigMap subPath bind mounts inside the RWX /var/www/html
-# mount: copy the read-only config files into the shared tree instead.
-install_config() {
-  src="$1"
-  dst="$2"
-  tmp="${dst}.tmp.$$"
-  cp "$src" "$tmp"
-  chmod 0444 "$tmp"
-  chown 0:0 "$tmp"
-  mv -f "$tmp" "$dst"
-}
-
-install_config /config/wp-config.php "$SHARED/wp-config.php"
-install_config /config/healthz.php "$SHARED/healthz.php"

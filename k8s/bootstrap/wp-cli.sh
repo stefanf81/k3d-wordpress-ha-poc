@@ -7,9 +7,9 @@ cd /var/www/html
 
 echo "Waiting for the shared WordPress files..."
 i=0
-# The WordPress init container writes the marker after its copy completes,
-# then installs wp-config.php.
-until [ -f .wordpress-files-ready ] && [ -f wp-config.php ]; do
+# The WordPress init container writes the marker after its copy completes.
+# wp-config.php is mounted one level above the root.
+until [ -f .wordpress-files-ready ] && [ -f /var/www/wp-config.php ]; do
   i=$((i + 1))
   if [ "$i" -gt 120 ]; then
     echo "Timed out waiting for WordPress files." >&2

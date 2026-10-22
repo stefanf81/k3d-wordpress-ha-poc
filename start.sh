@@ -11,7 +11,7 @@ docker info >/dev/null 2>&1 || die "Docker is not running."
 mkdir -p "$WORDPRESS_SHARED_DIR"
 
 # k3d expands these inside k3d.yaml.
-export K3S_IMAGE MARIADB_DATA_VOLUME WORDPRESS_SHARED_DIR
+export K3S_IMAGE MARIADB_DATA_VOLUME WORDPRESS_SHARED_DIR SITE_PORT
 
 echo "Using k3s image: $K3S_IMAGE"
 echo "Using MariaDB Docker volume: $MARIADB_DATA_VOLUME"
@@ -20,11 +20,7 @@ if cluster_exists; then
   # A k3d node's Docker mounts and published ports cannot be changed in
   # place. Detect an older project revision that still mounted
   # ./data/mariadb from the host.
-  mariadb_mount="$(
-    docker inspect "k3d-${CLUSTER_NAME}-server-0" \
-      --format '{{range .Mounts}}{{if eq .Destination "/var/lib/mariadb-data"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}' \
-      2>/dev/null || true
-  )"
+  mariadb_mount="$(mariadb_mount_on_server)"
 
   if [[ "$mariadb_mount" != "volume|${MARIADB_DATA_VOLUME}|"* ]]; then
     cat >&2 <<EOF
@@ -42,14 +38,31 @@ EOF
     exit 1
   fi
 
-  lb_bindings="$(docker port "k3d-${CLUSTER_NAME}-serverlb" 80/tcp 2>/dev/null || true)"
-  if [ -n "$lb_bindings" ] && grep -qv '^127\.0\.0\.1:' <<<"$lb_bindings"; then
+  exposed="$(published_beyond_localhost)"
+  if [ -n "$exposed" ]; then
     echo "WARNING: this cluster publishes the site beyond localhost:" >&2
     while IFS= read -r binding; do
       echo "  $binding" >&2
-    done <<<"$lb_bindings"
+    done <<<"$exposed"
     echo "Recreate it with ./stop.sh && ./start.sh (data is preserved)." >&2
   fi
+
+  # A stopped cluster (after ./stop.sh or a Docker restart) has no API server.
+  # Starting it and merging its kubeconfig makes the reuse path work either way.
+  echo "Starting k3d cluster '$CLUSTER_NAME' if its nodes are stopped..."
+  k3d cluster start "$CLUSTER_NAME" >/dev/null
+  k3d kubeconfig merge "$CLUSTER_NAME" --kubeconfig-merge-default >/dev/null
+
+  echo "Waiting for the Kubernetes API..."
+  api_ready=0
+  for _ in $(seq 1 60); do
+    if kubectl get --raw=/readyz >/dev/null 2>&1; then
+      api_ready=1
+      break
+    fi
+    sleep 3
+  done
+  [ "$api_ready" = "1" ] || die "the Kubernetes API of '$CLUSTER_NAME' did not become ready."
 
   echo "Reusing existing k3d cluster '$CLUSTER_NAME'."
   command kubectl config use-context "$KUBE_CONTEXT" >/dev/null
@@ -145,6 +158,14 @@ echo "Waiting for all 3 WordPress replicas to become ready..."
 kubectl rollout status deployment/wordpress \
   -n "$NS" \
   --timeout=420s
+
+# Older revisions copied wp-config.php and healthz.php into the shared tree.
+# A copy there takes precedence over the per-pod mount, so later config edits
+# would never reach the replicas. Every replica now mounts its own config,
+# so the copies can go. This runs only after the rollout, when no pod still
+# reads them. Removing a missing file is a no-op.
+kubectl exec -n "$NS" deployment/wordpress -c wordpress -- \
+  rm -f /var/www/html/wp-config.php /var/www/html/healthz.php
 
 echo
 echo "WordPress pod placement:"

@@ -48,8 +48,10 @@ if (
     $_SERVER['HTTPS'] = 'on';
 }
 
+// This file is mounted at /var/www/wp-config.php, one level above the
+// WordPress root, so __DIR__ would be the wrong directory here.
 if (!defined('ABSPATH')) {
-    define('ABSPATH', __DIR__ . '/');
+    define('ABSPATH', '/var/www/html/');
 }
 
 require_once ABSPATH . 'wp-settings.php';
