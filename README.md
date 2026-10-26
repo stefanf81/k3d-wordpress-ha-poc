@@ -81,7 +81,7 @@ current context points elsewhere.
              PHP 8.5          PHP 8.5          PHP 8.5
                  \               |               /
                   +---- shared WordPress tree ---+
-                        (one host directory)
+                       (one Docker named volume)
                                   |
                                   v
                               MariaDB
@@ -164,11 +164,13 @@ Environment overrides for `./start.sh` and the other scripts:
 ```bash
 K3S_IMAGE=rancher/k3s:<version> ./start.sh     # try another k3s release
 MARIADB_DATA_VOLUME=my-test-db ./start.sh      # use another database volume
+WORDPRESS_SHARED_VOLUME=my-test-wp ./start.sh  # use another WordPress volume
 ```
 
 k3s is pinned by default (`rancher/k3s:v1.36.2-k3s1`, set in `lib.sh`) so the
 Kubernetes runtime doesn't change underneath the lab. Use the same
-`MARIADB_DATA_VOLUME` with every script when you override it.
+`MARIADB_DATA_VOLUME` and `WORDPRESS_SHARED_VOLUME` with every script when you
+override them.
 
 ### WordPress core version
 
@@ -309,13 +311,25 @@ internet access the first time they are downloaded.
 
 ### Shared WordPress files
 
-This lab avoids NFS, Ceph or Longhorn. `./data/wordpress` on your machine is
-bind-mounted into **all three k3d worker containers** at
-`/var/lib/wordpress-shared`, and Kubernetes exposes that path through an RWX
-`hostPath` PV, so all WordPress pods see the same physical files.
+This lab avoids NFS, Ceph or Longhorn. The Docker named volume
+`wordpress-ha-poc-wordpress-shared` is mounted into **all three k3d worker
+containers** at `/var/lib/wordpress-shared`, and Kubernetes exposes that path
+through an RWX `hostPath` PV, so all WordPress pods see the same physical
+files.
 
 Do not copy this pattern to a real multi-machine cluster: there, identical
 hostPath strings point to different disks.
+
+The tree is a named volume rather than a host directory because it lives on
+Docker's Linux filesystem. A macOS or Windows bind mount goes through a VM file
+share, where `flock(1)` may not exclude across containers and file ownership
+isn't enforced. Either would break the init container's copy lock below. To
+browse the files, use a replica:
+
+```bash
+kubectl exec -n wordpress-poc deployment/wordpress -c wordpress -- \
+  find /var/www/html/wp-content -maxdepth 2 -type d
+```
 
 Each replica's init container prepares the tree before Apache starts:
 
@@ -341,12 +355,8 @@ Each replica's init container prepares the tree before Apache starts:
 
 Apache runs as `www-data`, uid 33 (Debian). The WP-CLI image's `www-data` is
 uid 82 (Alpine), so the bootstrap and inventory Jobs run explicitly as uid/gid
-33. Plugins, themes and media they install stay writable by Apache, and the
-Jobs can write to the shared tree on native Linux Docker, not only on Docker
-Desktop, whose file sharing doesn't enforce container user IDs.
-
-`./reset.sh` deletes the uid-33/root-owned files with a throwaway container
-when your host user can't (native Linux).
+33. Plugins, themes and media they install stay writable by Apache. The named
+volume enforces container user IDs on every platform, including Docker Desktop.
 
 ### MariaDB named volume
 
@@ -531,10 +541,12 @@ kubectl logs -n wordpress-poc -l app=wordpress --prefix --tail=100
 kubectl get all,pvc,pdb,ingress -n wordpress-poc
 ```
 
-Plugins and uploads appear on the host under `./data/wordpress/wp-content`:
+Plugins and uploads live in the shared WordPress volume (see
+[Shared WordPress files](#shared-wordpress-files) for how to browse it):
 
 ```bash
-find ./data/wordpress/wp-content -maxdepth 2 -type d
+kubectl exec -n wordpress-poc deployment/wordpress -c wordpress -- \
+  ls /var/www/html/wp-content/plugins
 ```
 
 Inside the cluster the site is `http://wordpress.wordpress-poc.svc.cluster.local`.
@@ -554,31 +566,37 @@ kubectl run wpscan -n wordpress-poc --rm -it --restart=Never \
 ./stop.sh
 ```
 
-This deletes the k3d cluster but keeps `./data/wordpress` and the
-`wordpress-ha-poc-mariadb-data` volume; `./start.sh` recreates the same site.
+This deletes the k3d cluster but keeps the `wordpress-ha-poc-wordpress-shared`
+and `wordpress-ha-poc-mariadb-data` volumes; `./start.sh` recreates the same
+site.
 
 ```bash
 ./reset.sh
 ```
 
-This deletes the cluster, the WordPress files, the MariaDB volume and any
-legacy `./data/mariadb`, then starts a fresh lab. `./backups/` is kept.
+This deletes the cluster, both volumes and any legacy `./data/wordpress` and
+`./data/mariadb`, then starts a fresh lab. `./backups/` is kept.
 
 Runtime data (`data/`, `backups/`, `reports/`) is ignored by Git.
 
 **Upgrading from an older revision:** run `./stop.sh && ./start.sh` once. A
-cluster's published ports can't change in place, so this is what moves the site
-to `127.0.0.1`. Your data is kept: the init container adopts the existing
-WordPress tree, adds any missing core files without overwriting updates, and
-resets ownership to uid 33.
+cluster's published ports and node mounts can't change in place, so this is what
+moves the site to `127.0.0.1` and onto the WordPress volume. Your data is kept:
+`./start.sh` copies `./data/wordpress` into the new volume, leaving the
+directory untouched so you can delete it once the site works. The init
+container then adopts the copied tree, adds any missing core files without
+overwriting updates, and resets ownership to uid 33. A database still in
+`./data/mariadb` needs the separate
+[migration](#migrate-an-existing-bind-mounted-database), which also carries the
+WordPress files over.
 
 ## Intentional trade-offs
 
 - MariaDB is a single instance and the largest remaining application SPOF.
 - k3d has one control-plane server and one host-facing load-balancer
   container: acceptable local-lab constraints, not production HA.
-- Shared WordPress storage is a host bind mount, fine for one machine but not
-  a multi-node storage design.
+- Shared WordPress storage is one Docker volume mounted into all workers, fine
+  for one machine but not a multi-node storage design.
 - Egress is open for plugin/theme/image bootstrap and vulnerability testing.
 - The official Apache WordPress image is kept for familiarity and plugin
   compatibility, rather than a heavily hardened custom image.
@@ -597,6 +615,9 @@ application images for plugin/theme code, TLS and stricter egress controls.
   waiting pod continues once that replica exits.
 - **`./verify.sh` says the site is published beyond localhost**: the cluster
   predates the localhost binding; run `./stop.sh && ./start.sh`.
+- **`./start.sh` reports an unexpected WordPress mount**: the cluster came from
+  a revision that bind-mounted `./data/wordpress`; run `./stop.sh && ./start.sh`
+  and the files are imported into the volume.
 - **`./start.sh` reports an unexpected MariaDB mount**: the cluster came from a
   revision that used `./data/mariadb`; see
   [Migrate an existing bind-mounted database](#migrate-an-existing-bind-mounted-database).

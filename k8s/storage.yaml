@@ -11,7 +11,7 @@ metadata:
     pod-security.kubernetes.io/warn-version: v1.36
 ---
 # k3d-specific shared filesystem:
-# /var/lib/wordpress-shared is the SAME host directory bind-mounted into all
+# /var/lib/wordpress-shared is the SAME Docker named volume mounted into all
 # three k3d agent containers. This makes the hostPath effectively shared for
 # this local PoC. Do not copy this storage pattern to a real multi-machine cluster.
 apiVersion: v1

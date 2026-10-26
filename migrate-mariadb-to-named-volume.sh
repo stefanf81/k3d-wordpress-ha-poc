@@ -72,7 +72,7 @@ grep -qE '^(CREATE TABLE|INSERT INTO|DROP TABLE)' "$dump_file" ||
 echo "Backup complete ($(wc -c <"$dump_file" | tr -d ' ') bytes)."
 
 echo
-echo "Deleting old k3d cluster. WordPress host files and SQL backup are preserved..."
+echo "Deleting old k3d cluster. ./data/wordpress and the SQL backup are preserved..."
 k3d cluster delete "$CLUSTER_NAME"
 
 echo "Creating fresh Linux-backed MariaDB Docker volume..."

@@ -24,12 +24,13 @@ ports:
     nodeFilters:
       - loadbalancer
 
-# WordPress content remains a host bind because all three k3d workers need
-# to see the exact same local directory. MariaDB uses a Docker named volume
-# instead, so its datadir lives on Docker Desktop's Linux filesystem rather
-# than the macOS host filesystem.
+# Both stores are Docker named volumes, so they live on Docker's Linux
+# filesystem rather than a macOS/Windows host file share. That keeps MariaDB's
+# case-sensitive table names and gives the WordPress init containers working
+# flock(1) locks and uid/gid ownership. All three workers mount the same
+# WordPress volume, which is how the replicas share one tree.
 volumes:
-  - volume: ${WORDPRESS_SHARED_DIR}:/var/lib/wordpress-shared
+  - volume: ${WORDPRESS_SHARED_VOLUME}:/var/lib/wordpress-shared
     nodeFilters:
       - agent:*
   - volume: ${MARIADB_DATA_VOLUME}:/var/lib/mariadb-data

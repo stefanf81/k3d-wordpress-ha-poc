@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deletes the cluster, WordPress files and MariaDB volume, then starts a
+# Deletes the cluster and the WordPress and MariaDB volumes, then starts a
 # completely fresh lab. Files under ./backups/ are kept.
 set -euo pipefail
 
@@ -8,10 +8,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_commands docker k3d
 
-# Files in ./data are owned by uid 33 and root. On Docker Desktop for macOS
-# the host user can delete them anyway; on native Linux it can't, so delete
-# them as root from a throwaway container using the (already pulled) k3s
-# image, which ships /bin/rm.
+# Older revisions kept their data in ./data as host bind mounts. Those files
+# are owned by uid 33 and root. On Docker Desktop for macOS the host user can
+# delete them anyway; on native Linux it can't, so delete them as root from a
+# throwaway container using the (already pulled) k3s image, which ships
+# /bin/rm. They must go, or ./start.sh would import ./data/wordpress into the
+# fresh volume.
 remove_data_dir() {
   local name="$1"
 
@@ -32,8 +34,10 @@ if cluster_exists; then
 fi
 
 echo "Deleting WordPress shared files..."
+if docker volume inspect "$WORDPRESS_SHARED_VOLUME" >/dev/null 2>&1; then
+  docker volume rm "$WORDPRESS_SHARED_VOLUME" >/dev/null
+fi
 remove_data_dir wordpress
-mkdir -p "$WORDPRESS_SHARED_DIR"
 
 # Remove data left by revisions that used a host bind mount for MariaDB.
 remove_data_dir mariadb

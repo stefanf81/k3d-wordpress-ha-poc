@@ -27,7 +27,9 @@
   # e.g.: K3S_IMAGE=rancher/k3s:<version> ./start.sh
   K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.36.2-k3s1}"
   MARIADB_DATA_VOLUME="${MARIADB_DATA_VOLUME:-wordpress-ha-poc-mariadb-data}"
-  WORDPRESS_SHARED_DIR="$ROOT_DIR/data/wordpress"
+  WORDPRESS_SHARED_VOLUME="${WORDPRESS_SHARED_VOLUME:-wordpress-ha-poc-wordpress-shared}"
+  # Where older revisions kept the shared tree as a host bind mount.
+  LEGACY_WORDPRESS_DIR="$ROOT_DIR/data/wordpress"
 
   # Waits are a little longer than each Job's activeDeadlineSeconds, so the
   # Job's own deadline is what reports a hang.
@@ -67,12 +69,22 @@ require_cluster() {
     die "kubectl context '$KUBE_CONTEXT' not found. Run ./start.sh first."
 }
 
-# Prints "<type>|<volume>|<source>" for the MariaDB mount on the k3d server
-# node, or nothing if the container or mount is missing.
-mariadb_mount_on_server() {
-  docker inspect "k3d-${CLUSTER_NAME}-server-0" \
-    --format '{{range .Mounts}}{{if eq .Destination "/var/lib/mariadb-data"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}' \
+# Prints "<type>|<volume>|<source>" for the mount at path $2 of container $1,
+# or nothing if the container or mount is missing.
+container_mount() {
+  docker inspect "$1" \
+    --format '{{range .Mounts}}{{if eq .Destination "'"$2"'"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}' \
     2>/dev/null || true
+}
+
+# The MariaDB mount on the k3d server node.
+mariadb_mount_on_server() {
+  container_mount "k3d-${CLUSTER_NAME}-server-0" /var/lib/mariadb-data
+}
+
+# The shared WordPress mount on k3d worker node $1 (0-2).
+wordpress_mount_on_agent() {
+  container_mount "k3d-${CLUSTER_NAME}-agent-$1" /var/lib/wordpress-shared
 }
 
 # Prints the load balancer's published HTTP bindings that are not on

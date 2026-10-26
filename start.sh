@@ -8,13 +8,37 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 require_commands docker k3d kubectl curl
 docker info >/dev/null 2>&1 || die "Docker is not running."
 
-mkdir -p "$WORDPRESS_SHARED_DIR"
-
 # k3d expands these inside k3d.yaml.
-export K3S_IMAGE MARIADB_DATA_VOLUME WORDPRESS_SHARED_DIR SITE_PORT
+export K3S_IMAGE MARIADB_DATA_VOLUME WORDPRESS_SHARED_VOLUME SITE_PORT
 
 echo "Using k3s image: $K3S_IMAGE"
 echo "Using MariaDB Docker volume: $MARIADB_DATA_VOLUME"
+echo "Using WordPress Docker volume: $WORDPRESS_SHARED_VOLUME"
+
+# Creates the shared WordPress volume. Files from an older revision's
+# ./data/wordpress host directory are copied in on creation, so an upgrade
+# keeps plugins, uploads and core updates. The host directory is left alone.
+create_wordpress_shared_volume() {
+  docker volume create \
+    --label "com.k3d-wordpress-ha-poc.role=wordpress-shared" \
+    "$WORDPRESS_SHARED_VOLUME" >/dev/null
+
+  [ -n "$(ls -A "$LEGACY_WORDPRESS_DIR" 2>/dev/null)" ] || return 0
+
+  echo "Importing ./data/wordpress into the Docker volume..."
+  # Same throwaway-container approach as reset.sh: root inside the container
+  # can read every file, and cp -a keeps owners and modes.
+  if ! docker run --rm \
+    --entrypoint /bin/cp \
+    -v "$LEGACY_WORDPRESS_DIR:/src:ro" \
+    -v "$WORDPRESS_SHARED_VOLUME:/dst" \
+    "$K3S_IMAGE" -a /src/. /dst/; then
+    # A half-filled volume would be reused as if it were complete.
+    docker volume rm "$WORDPRESS_SHARED_VOLUME" >/dev/null 2>&1 || true
+    die "could not import ./data/wordpress; the volume was removed. Fix the cause and re-run."
+  fi
+  echo "Imported. ./data/wordpress is no longer used and can be deleted."
+}
 
 if cluster_exists; then
   # A k3d node's Docker mounts and published ports cannot be changed in
@@ -37,6 +61,24 @@ For a disposable clean rebuild instead, use:
 EOF
     exit 1
   fi
+
+  for agent in 0 1 2; do
+    wordpress_mount="$(wordpress_mount_on_agent "$agent")"
+    if [[ "$wordpress_mount" != "volume|${WORDPRESS_SHARED_VOLUME}|"* ]]; then
+      cat >&2 <<EOF
+ERROR: Existing cluster does not mount the WordPress Docker named volume on agent-$agent.
+Current mount: ${wordpress_mount:-<not found>}
+Expected Docker volume: $WORDPRESS_SHARED_VOLUME
+
+An older revision bind-mounted ./data/wordpress. A node's mounts can't be
+changed in place, so recreate the cluster:
+  ./stop.sh && ./start.sh
+The files in ./data/wordpress are imported into the volume, and the database
+is kept.
+EOF
+      exit 1
+    fi
+  done
 
   exposed="$(published_beyond_localhost)"
   if [ -n "$exposed" ]; then
@@ -74,6 +116,13 @@ else
     docker volume create \
       --label "com.k3d-wordpress-ha-poc.role=mariadb-data" \
       "$MARIADB_DATA_VOLUME" >/dev/null
+  fi
+
+  if docker volume inspect "$WORDPRESS_SHARED_VOLUME" >/dev/null 2>&1; then
+    echo "Reusing WordPress Docker named volume '$WORDPRESS_SHARED_VOLUME'."
+  else
+    echo "Creating WordPress Docker named volume..."
+    create_wordpress_shared_volume
   fi
 
   echo "Creating k3d cluster with 3 worker nodes..."

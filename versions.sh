@@ -51,6 +51,11 @@ docker volume inspect "$MARIADB_DATA_VOLUME" \
 echo "lower_case_table_names=$(mariadb_query 'SELECT @@lower_case_table_names;')"
 echo
 
+echo "=== WordPress storage ==="
+docker volume inspect "$WORDPRESS_SHARED_VOLUME" \
+  --format 'Name={{.Name}} Driver={{.Driver}} Mountpoint={{.Mountpoint}}'
+echo
+
 echo "=== Managed plugins ==="
 kubectl logs -n "$NS" job/wordpress-bootstrap |
   sed -n '/Installed plugins:/,$p'

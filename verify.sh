@@ -64,6 +64,16 @@ lower_case_table_names="$(mariadb_query 'SELECT @@lower_case_table_names;')" ||
 [ "$lower_case_table_names" = "0" ] ||
   fail "MariaDB lower_case_table_names=$lower_case_table_names; expected 0"
 
+echo "Checking WordPress Docker named volume..."
+docker volume inspect "$WORDPRESS_SHARED_VOLUME" >/dev/null 2>&1 ||
+  fail "Docker volume $WORDPRESS_SHARED_VOLUME does not exist"
+
+for agent in 0 1 2; do
+  agent_mount="$(wordpress_mount_on_agent "$agent")"
+  [[ "$agent_mount" == "volume|${WORDPRESS_SHARED_VOLUME}|"* ]] ||
+    fail "agent-$agent WordPress mount is '${agent_mount:-<not found>}', expected volume|$WORDPRESS_SHARED_VOLUME"
+done
+
 echo "Checking PVCs..."
 for pvc in wordpress-shared mariadb-data; do
   phase="$(kubectl get pvc "$pvc" -n "$NS" -o jsonpath='{.status.phase}')" ||
