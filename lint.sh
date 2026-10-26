@@ -44,6 +44,21 @@ if have shellcheck; then
   shellcheck -x ./*.sh k8s/*/*.sh && echo "clean" || failed=1
 fi
 
+section "Timeouts"
+# The Deployment's progress deadline must outlast the bootstrap wait, or the
+# rollout is marked failed while the bootstrap is still creating the schema.
+bootstrap_timeout="$(sed -n 's/^ *BOOTSTRAP_TIMEOUT=\([0-9]*\).*/\1/p' lib.sh)"
+progress_deadline="$(sed -n 's/^ *progressDeadlineSeconds: *\([0-9]*\).*/\1/p' k8s/wordpress/wordpress.yaml)"
+if [ -z "$bootstrap_timeout" ] || [ -z "$progress_deadline" ]; then
+  echo "could not read BOOTSTRAP_TIMEOUT (lib.sh) or progressDeadlineSeconds (wordpress.yaml)"
+  failed=1
+elif [ "$progress_deadline" -le "$bootstrap_timeout" ]; then
+  echo "progressDeadlineSeconds ($progress_deadline) must exceed BOOTSTRAP_TIMEOUT ($bootstrap_timeout)"
+  failed=1
+else
+  echo "progressDeadlineSeconds $progress_deadline > BOOTSTRAP_TIMEOUT $bootstrap_timeout"
+fi
+
 section "PHP syntax"
 if have php; then
   for file in k8s/*/*.php; do

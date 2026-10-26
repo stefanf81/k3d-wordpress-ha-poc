@@ -4,6 +4,7 @@ kind: Kustomization
 namespace: wordpress-poc
 
 resources:
+  - ../wp-config
   - wordpress.yaml
 
 configMapGenerator:
@@ -11,7 +12,6 @@ configMapGenerator:
   # and re-running ./start.sh rolls the WordPress Deployment.
   - name: wordpress-config
     files:
-      - wp-config.php
       - healthz.php
       - init-shared-files.sh
   - name: wordpress-cron

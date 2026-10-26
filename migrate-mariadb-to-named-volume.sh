@@ -15,7 +15,11 @@ This helper migrates an existing bind-mounted MariaDB database."
 current_mount="$(mariadb_mount_on_server)"
 # An empty result would otherwise look like "not migrated yet" and lead to a
 # cluster delete.
-[ -n "$current_mount" ] || die "k3d server node container not found; refusing to continue."
+if [ -z "$current_mount" ]; then
+  docker inspect "k3d-${CLUSTER_NAME}-server-0" >/dev/null 2>&1 ||
+    die "k3d server node container not found; refusing to continue."
+  die "the k3d server node has no /var/lib/mariadb-data mount; refusing to continue."
+fi
 
 if [[ "$current_mount" == "volume|${MARIADB_DATA_VOLUME}|"* ]]; then
   echo "MariaDB already uses Docker named volume '$MARIADB_DATA_VOLUME'."

@@ -7,7 +7,8 @@ spec:
   replicas: 3
   minReadySeconds: 5
   # Replicas stay NotReady until the WP-CLI bootstrap creates the schema, which
-  # can take up to BOOTSTRAP_TIMEOUT (960s in lib.sh). The deadline must outlast it.
+  # can take up to BOOTSTRAP_TIMEOUT (960s in lib.sh). The deadline must outlast
+  # it; lint.sh checks that.
   progressDeadlineSeconds: 1200
   revisionHistoryLimit: 3
   strategy:
@@ -122,7 +123,7 @@ spec:
             # WordPress loads wp-config.php from the parent of its root when
             # the root has none. This path is outside the RWX mount, so it is
             # per-pod: a later rollout cannot change config under older replicas.
-            - name: wordpress-config
+            - name: wordpress-wp-config
               mountPath: /var/www/wp-config.php
               subPath: wp-config.php
               readOnly: true
@@ -136,6 +137,9 @@ spec:
         - name: wordpress-config
           configMap:
             name: wordpress-config
+        - name: wordpress-wp-config
+          configMap:
+            name: wordpress-wp-config
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

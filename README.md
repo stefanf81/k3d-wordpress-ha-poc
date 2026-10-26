@@ -120,8 +120,10 @@ k8s/
   mariadb.yaml           MariaDB Deployment and Service
   traefik-config.yaml    HelmChartConfig for the bundled Traefik
   wordpress/             kustomization: Deployment, PDB, Service, Ingress,
-                         WP-Cron CronJob, wp-config.php, healthz.php and the
-                         init-container script
+                         WP-Cron CronJob, healthz.php and the init-container
+                         script
+  wp-config/             the one wp-config.php, built into a ConfigMap by the
+                         wordpress, bootstrap and inventory kustomizations
   bootstrap/             kustomization: WP-CLI bootstrap Job, site.env,
                          plugins.txt, seed and configuration scripts
   inventory/             kustomization: on-demand WP-CLI inventory Job
@@ -131,11 +133,12 @@ k8s/
 Scripts, PHP and page content are real files. Kustomize's
 `configMapGenerator` turns them into ConfigMaps (`kubectl apply -k`), so they
 can be linted, diffed and reviewed like any other code. The WordPress
-ConfigMap name carries a content hash: editing `wp-config.php`,
+ConfigMap names carry a content hash: editing `wp-config.php`,
 `healthz.php` or the init script and re-running `./start.sh` rolls the
-WordPress Deployment. Each replica mounts its own copy of the config, so
-replicas still running the previous revision keep the config they started
-with until they are replaced.
+WordPress Deployment. The WP-CLI Jobs build `wp-config.php` from the same
+`k8s/wp-config/` directory, so they always run with the config in git. Each
+replica mounts its own copy of the config, so replicas still running the
+previous revision keep the config they started with until they are replaced.
 
 ## Configuration
 
@@ -147,7 +150,7 @@ with until they are replaced.
 | Plugin configuration | `k8s/bootstrap/configure-plugins.php` |
 | Demo content | `k8s/bootstrap/seed-site.sh`, `k8s/bootstrap/contact.html` |
 | Passwords and salts | `k8s/secrets.yaml` |
-| WordPress runtime config | `k8s/wordpress/wp-config.php` |
+| WordPress runtime config | `k8s/wp-config/wp-config.php` |
 
 After editing anything under `k8s/bootstrap/`:
 
@@ -348,8 +351,8 @@ Each replica's init container prepares the tree before Apache starts:
   not yet verified on a live cluster: run `./start.sh` and `./verify.sh` after
   changing them.
 - Older revisions copied `wp-config.php` and `healthz.php` into the shared
-  tree. `./start.sh` removes those copies after the rollout, because a copy
-  there would take precedence over the per-pod mount.
+  tree. The init container deletes those copies, because a copy there would
+  take precedence over the per-pod mounts.
 
 ### File ownership
 

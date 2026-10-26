@@ -3,11 +3,18 @@ set -eu
 
 cd /var/www/html
 
-# Seeding writes only core tables. Skipping plugin and theme loading keeps each
-# of the ~200 wp calls below from booting every active plugin.
+# wp loads neither plugins nor themes, so each of the ~200 calls below doesn't
+# boot every active plugin. That is enough for reads and for options, terms and
+# term relationships. wpf loads everything and is used wherever a command creates,
+# changes or deletes posts, users, comments, media or themes, so the theme's
+# image sizes and the plugins' save hooks apply as they would for an editor.
 # configure-plugins.php runs later, with everything loaded.
 wp() {
   command wp --skip-plugins --skip-themes "$@"
+}
+
+wpf() {
+  command wp "$@"
 }
 
 log() {
@@ -30,12 +37,12 @@ page_upsert() {
   id="$(post_id_by_slug page "$slug")"
 
   if [ -n "$id" ]; then
-    wp post update "$id" \
+    wpf post update "$id" \
       --post_title="$title" \
       --post_content="$(cat "$content_file")" \
       --post_status=publish >/dev/null
   else
-    id="$(wp post create \
+    id="$(wpf post create \
       --post_type=page \
       --post_status=publish \
       --post_title="$title" \
@@ -57,7 +64,7 @@ page_ensure() {
   id="$(post_id_by_slug page "$slug")"
 
   if [ -z "$id" ]; then
-    id="$(wp post create \
+    id="$(wpf post create \
       --post_type=page \
       --post_status=publish \
       --post_title="$title" \
@@ -97,14 +104,14 @@ user_ensure() {
   id="$(wp user get "$login" --field=ID 2>/dev/null || true)"
 
   if [ -z "$id" ]; then
-    id="$(wp user create "$login" "$email" \
+    id="$(wpf user create "$login" "$email" \
       --role=author \
       --display_name="$display" \
       --user_pass='northstar-author-poc' \
       --porcelain)"
   fi
 
-  wp user update "$id" \
+  wpf user update "$id" \
     --display_name="$display" \
     --first_name="$first" \
     --last_name="$last" >/dev/null
@@ -126,7 +133,7 @@ post_upsert() {
   # Articles accept comments explicitly, independent of the site-wide
   # default_comment_status that after-install.sh closes.
   if [ -n "$id" ]; then
-    wp post update "$id" \
+    wpf post update "$id" \
       --post_title="$title" \
       --post_content="$(cat "$content_file")" \
       --post_excerpt="$excerpt" \
@@ -134,7 +141,7 @@ post_upsert() {
       --comment_status=open \
       --post_status=publish >/dev/null
   else
-    id="$(wp post create \
+    id="$(wpf post create \
       --post_type=post \
       --post_status=publish \
       --post_title="$title" \
@@ -173,7 +180,7 @@ featured_image_ensure() {
 
   # Remote media is intentionally best-effort. The PoC still works if the
   # machine is temporarily offline after images/plugins are already cached.
-  wp media import \
+  wpf media import \
     "https://picsum.photos/seed/${seed}/1200/675.jpg" \
     --post_id="$post_id" \
     --featured_image \
@@ -194,14 +201,14 @@ comment_seed_if_empty() {
     return 0
   fi
 
-  wp comment create \
+  wpf comment create \
     --comment_post_ID="$post_id" \
     --comment_author="Maya Chen" \
     --comment_author_email="maya@example.test" \
     --comment_content="Clear explanation. The trade-offs section is especially useful for teams that need to move incrementally." \
     --comment_approved=1 >/dev/null
 
-  wp comment create \
+  wpf comment create \
     --comment_post_ID="$post_id" \
     --comment_author="Jonas Vermeer" \
     --comment_author_email="jonas@example.test" \
@@ -221,11 +228,11 @@ wp option update posts_per_page 6 >/dev/null
 
 log "Installing and activating Twenty Twenty-Five"
 if wp theme is-installed twentytwentyfive >/dev/null 2>&1; then
-  wp theme update twentytwentyfive >/dev/null 2>&1 || true
+  wpf theme update twentytwentyfive >/dev/null 2>&1 || true
 else
-  wp theme install twentytwentyfive >/dev/null
+  wpf theme install twentytwentyfive >/dev/null
 fi
-wp theme activate twentytwentyfive >/dev/null
+wpf theme activate twentytwentyfive >/dev/null
 
 log "Creating realistic authors"
 AUTHOR_ELENA="$(user_ensure elena.rossi elena.rossi@example.test "Elena Rossi" Elena Rossi)"
@@ -438,7 +445,7 @@ foreach ( $args as $page_id ) {
 }
 EOF
 
-wp eval-file "$tmpdir/primary-menu.php" \
+wpf eval-file "$tmpdir/primary-menu.php" \
   "$HOME_ID" "$SERVICES_ID" "$CASE_ID" "$ABOUT_ID" "$INSIGHTS_ID" "$CONTACT_ID"
 
 log "Creating realistic articles"
@@ -653,12 +660,12 @@ done
 log "Removing default placeholder content"
 HELLO_ID="$(post_id_by_slug post hello-world)"
 if [ -n "$HELLO_ID" ]; then
-  wp post delete "$HELLO_ID" --force >/dev/null
+  wpf post delete "$HELLO_ID" --force >/dev/null
 fi
 
 SAMPLE_ID="$(post_id_by_slug page sample-page)"
 if [ -n "$SAMPLE_ID" ]; then
-  wp post delete "$SAMPLE_ID" --force >/dev/null
+  wpf post delete "$SAMPLE_ID" --force >/dev/null
 fi
 
 log "Northstar Digital content summary"

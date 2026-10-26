@@ -80,6 +80,13 @@ EOF
     fi
   done
 
+  # A stopped cluster (after ./stop.sh or a Docker restart) has no API server.
+  # Starting it and merging its kubeconfig makes the reuse path work either way.
+  echo "Starting k3d cluster '$CLUSTER_NAME' if its nodes are stopped..."
+  k3d cluster start "$CLUSTER_NAME" >/dev/null
+  k3d kubeconfig merge "$CLUSTER_NAME" --kubeconfig-merge-default >/dev/null
+
+  # Checked only now: a stopped load balancer has no published ports to read.
   exposed="$(published_beyond_localhost)"
   if [ -n "$exposed" ]; then
     echo "WARNING: this cluster publishes the site beyond localhost:" >&2
@@ -88,12 +95,6 @@ EOF
     done <<<"$exposed"
     echo "Recreate it with ./stop.sh && ./start.sh (data is preserved)." >&2
   fi
-
-  # A stopped cluster (after ./stop.sh or a Docker restart) has no API server.
-  # Starting it and merging its kubeconfig makes the reuse path work either way.
-  echo "Starting k3d cluster '$CLUSTER_NAME' if its nodes are stopped..."
-  k3d cluster start "$CLUSTER_NAME" >/dev/null
-  k3d kubeconfig merge "$CLUSTER_NAME" --kubeconfig-merge-default >/dev/null
 
   echo "Waiting for the Kubernetes API..."
   api_ready=0
@@ -207,14 +208,6 @@ echo "Waiting for all 3 WordPress replicas to become ready..."
 kubectl rollout status deployment/wordpress \
   -n "$NS" \
   --timeout=420s
-
-# Older revisions copied wp-config.php and healthz.php into the shared tree.
-# A copy there takes precedence over the per-pod mount, so later config edits
-# would never reach the replicas. Every replica now mounts its own config,
-# so the copies can go. This runs only after the rollout, when no pod still
-# reads them. Removing a missing file is a no-op.
-kubectl exec -n "$NS" deployment/wordpress -c wordpress -- \
-  rm -f /var/www/html/wp-config.php /var/www/html/healthz.php
 
 echo
 echo "WordPress pod placement:"

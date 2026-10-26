@@ -69,7 +69,7 @@ spec:
             - name: wordpress-shared
               mountPath: /var/www/html
             # One level above the WordPress root, where WordPress and WP-CLI
-            # look for wp-config.php. lib.sh creates this ConfigMap on each run.
+            # look for wp-config.php. Built from k8s/wp-config, like the Deployment's.
             - name: wordpress-wp-config
               mountPath: /var/www/wp-config.php
               subPath: wp-config.php

@@ -4,6 +4,7 @@ kind: Kustomization
 namespace: wordpress-poc
 
 resources:
+  - ../wp-config
   - job.yaml
 
 # The Job is recreated on every ./start.sh and ./reconfigure.sh run, so

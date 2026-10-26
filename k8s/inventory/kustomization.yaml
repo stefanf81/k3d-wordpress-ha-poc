@@ -4,6 +4,7 @@ kind: Kustomization
 namespace: wordpress-poc
 
 resources:
+  - ../wp-config
   - job.yaml
 
 configMapGenerator:

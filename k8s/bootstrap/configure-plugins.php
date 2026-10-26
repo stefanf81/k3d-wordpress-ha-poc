@@ -176,8 +176,11 @@ if ( $contact_page ) {
 
 	// Compare with what WordPress would store. content_save_pre applies kses
 	// filtering when the current user lacks unfiltered_html (always true under
-	// WP-CLI), so comparing the raw source would always differ.
-	$stored_content = apply_filters( 'content_save_pre', $contact_content );
+	// WP-CLI), so comparing the raw source would always differ. The filter
+	// expects slashed data, as wp_update_post() receives it below, so slash the
+	// source and unslash the result; otherwise a backslash in the content
+	// would make the page differ on every run.
+	$stored_content = wp_unslash( apply_filters( 'content_save_pre', wp_slash( $contact_content ) ) );
 
 	// Leave an unchanged page alone so repeated runs don't touch it.
 	if ( $contact_page->post_content !== $stored_content ) {

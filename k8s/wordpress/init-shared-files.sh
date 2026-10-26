@@ -59,5 +59,12 @@ if [ ! -f "$MARKER" ]; then
 fi
 exec 9>&-
 
+# Older revisions copied wp-config.php and healthz.php into the shared tree. A
+# copy there shadows the per-pod mounts, so config edits would never reach the
+# replicas. Every replica mounts its own config now, and the move to the Docker
+# volume recreates the cluster, so no old pod still reads them. Removing a
+# missing file is a no-op, and concurrent replicas can do it safely.
+rm -f "$SHARED/wp-config.php" "$SHARED/healthz.php"
+
 test -f "$SHARED/wp-includes/version.php"
 mkdir -p "$SHARED/wp-content/mu-plugins"

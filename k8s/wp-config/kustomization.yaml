@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wordpress-poc
+
+# The one wp-config.php, shared by the WordPress Deployment and the WP-CLI
+# Jobs. Each of those kustomizations lists this directory as a resource, so
+# they all build the same ConfigMap and reference it by its generated name.
+# The name carries a content hash: editing wp-config.php and re-running
+# ./start.sh rolls the Deployment.
+configMapGenerator:
+  - name: wordpress-wp-config
+    files:
+      - wp-config.php

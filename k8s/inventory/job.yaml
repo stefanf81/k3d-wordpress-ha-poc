@@ -68,8 +68,8 @@ spec:
           volumeMounts:
             - name: wordpress-shared
               mountPath: /var/www/html
-            # One level above the WordPress root. lib.sh creates this ConfigMap
-            # before the Job is applied.
+            # One level above the WordPress root. Built from k8s/wp-config,
+            # like the Deployment's.
             - name: wordpress-wp-config
               mountPath: /var/www/wp-config.php
               subPath: wp-config.php

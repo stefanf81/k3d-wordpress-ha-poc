@@ -9,7 +9,6 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 require_cluster
 
 kubectl apply -f "$ROOT_DIR/k8s/security.yaml" >/dev/null
-apply_wp_config_configmap
 kubectl delete job wordpress-inventory \
   -n "$NS" \
   --ignore-not-found=true \
