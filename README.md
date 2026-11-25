@@ -31,8 +31,11 @@ These credentials are disposable PoC values. The three demo authors
 
 ## Requirements
 
-- Docker: Docker Desktop on macOS/Windows, or Docker Engine on Linux
-- [k3d](https://k3d.io) v5.8.3, the version CI tests. `k3d.yaml` uses the
+- Docker: Docker Desktop on macOS/Windows, or Docker Engine on Linux, on a
+  cgroup v2 host. The pinned k3s release refuses cgroup v1, so `./start.sh`
+  stops early if it finds it; current Docker Desktop, Rancher Desktop, colima
+  and recent Linux distributions all use cgroup v2.
+- [k3d](https://k3d.io) v5.9.0, the version CI tests. `k3d.yaml` uses the
   `k3d.io/v1alpha5` config API, so use a 5.x release that supports it.
 - kubectl
 - curl
@@ -133,6 +136,7 @@ k8s/
                          plugins.txt, seed and configuration scripts
   inventory/             kustomization: on-demand WP-CLI inventory Job
 .github/workflows/ci.yaml  lint plus an end-to-end k3d smoke test
+.github/actions/setup-k3d  CI: checksum-verified k3d, raised inotify limits
 ```
 
 Scripts, PHP, page content and credentials are real files. Kustomize's
@@ -190,7 +194,15 @@ Environment overrides for `./start.sh` and the other scripts:
 K3S_IMAGE=rancher/k3s:<version> ./start.sh     # try another k3s release
 MARIADB_DATA_VOLUME=my-test-db ./start.sh      # use another database volume
 WORDPRESS_SHARED_VOLUME=my-test-wp ./start.sh  # use another WordPress volume
+CLUSTER_CREATE_ATTEMPTS=1 ./start.sh           # don't retry a failed create
 ```
+
+Creating or starting the cluster is retried once (`CLUSTER_CREATE_ATTEMPTS`,
+`CLUSTER_START_ATTEMPTS`, default 2) when a node fails to come up, which
+happens now and then on a busy machine. Before each retry, `./start.sh`
+prints the distinct errors of every node container's log, because k3d itself
+only reports that a node "failed to get ready". A stopped cluster's nodes must
+also stay up for a few seconds before the scripts continue.
 
 k3s is pinned by default (`rancher/k3s:v1.36.2-k3s1` plus its digest, set in
 `lib.sh`) so the Kubernetes runtime doesn't change underneath the lab. Use the same
@@ -562,7 +574,9 @@ failed requests with `MAX_FAILED_REQUESTS=2 ./test-ha.sh`.
 
 GitHub Actions (`.github/workflows/ci.yaml`) runs `lint.sh`, then a smoke test
 that creates the lab on a fresh runner and runs `verify.sh`, `check.sh`,
-`test-ha.sh` and `test-ingress-ha.sh`.
+`test-ha.sh` and `test-ingress-ha.sh`. It installs k3d as a checksum-verified
+binary and raises the runner's inotify limits, which four k3s nodes on one
+kernel can otherwise exhaust.
 
 To delete a pod by hand:
 

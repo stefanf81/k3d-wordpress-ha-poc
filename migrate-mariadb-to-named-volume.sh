@@ -14,6 +14,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_commands docker k3d kubectl curl
 docker info >/dev/null 2>&1 || die "Docker is not running."
+require_cgroup_v2_for_k3s
 
 DB_NAME="$(sed -n 's/^WORDPRESS_DB_NAME=//p' "$ROOT_DIR/k8s/secrets/database.env" | tr -d '\r')"
 MARIADB_IMAGE="$(sed -n 's/^ *image: *\(mariadb:.*\)$/\1/p' "$ROOT_DIR/k8s/mariadb/mariadb.yaml" | head -n 1)"

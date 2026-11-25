@@ -7,6 +7,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_commands docker k3d kubectl curl
 docker info >/dev/null 2>&1 || die "Docker is not running."
+require_cgroup_v2_for_k3s
 
 # k3d expands these inside k3d.yaml.
 export K3S_IMAGE MARIADB_DATA_VOLUME WORDPRESS_SHARED_VOLUME SITE_PORT
@@ -145,7 +146,7 @@ EOF
   fi
 
   echo "Creating k3d cluster with 3 worker nodes..."
-  k3d cluster create --config "$ROOT_DIR/k3d.yaml"
+  create_cluster
 fi
 
 echo

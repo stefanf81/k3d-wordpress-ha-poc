@@ -94,11 +94,149 @@ dir_has_entries() {
   [ -n "$entries" ]
 }
 
-# Starts the cluster if its nodes are stopped (after a Docker restart, say),
-# merges its kubeconfig and waits for the API.
+# Fails on a cgroup v1 Docker host when the k3s image is 1.35 or newer: its
+# kubelet refuses cgroup v1, and k3d only reports that as a node that "failed
+# to get ready" after its timeout, on every create or start attempt.
+require_cgroup_v2_for_k3s() {
+  [ "$(docker info --format '{{.CgroupVersion}}' 2>/dev/null)" = "1" ] || return 0
+  case "${K3S_IMAGE#*:}" in
+    v1.3[5-9].* | v1.[4-9][0-9].* | v[2-9].*) ;;
+    *) return 0 ;;
+  esac
+  cat >&2 <<EOF
+ERROR: Docker runs on a cgroup v1 host. The k3s release in K3S_IMAGE refuses
+cgroup v1, so the cluster nodes would never become ready:
+  $K3S_IMAGE
+Use a host or Docker VM with cgroup v2: current Docker Desktop, Rancher
+Desktop, colima and Linux distributions from the last few years all use it.
+EOF
+  exit 1
+}
+
+# The distinct error lines of a k3s node log (read on stdin), oldest first,
+# with a repeat count; lines that differ only in numbers (timestamps, ports,
+# PIDs) count as the same. A failing node usually retries the same request
+# every two seconds, so the end of its log is one repeated line and the cause,
+# logged once at start-up, is far above it. Without error lines, the distinct
+# lines of the last 40 are shown instead.
+summarize_node_log() {
+  awk '
+    function add(line, kind,   key) {
+      sub(/^time="[^"]*" /, "", line)
+      sub(/^[EFW][0-9][0-9][0-9][0-9] [0-9:.]+ +[0-9]+ /, "", line)
+      line = substr(line, 1, 300)
+      key = line
+      gsub(/[0-9]+/, "#", key)
+      if (!((kind, key) in count)) { n[kind]++; order[kind, n[kind]] = key; text[kind, key] = line }
+      count[kind, key]++
+    }
+    { last[NR % 40] = $0 }
+    /level=(error|fatal)|^[EF][0-9][0-9][0-9][0-9] |^Error|panic:/ { add($0, "err") }
+    END {
+      kind = "err"
+      if (!n["err"]) { kind = "tail"; for (i = (NR > 40 ? NR - 39 : 1); i <= NR; i++) add(last[i % 40], kind) }
+      first = n[kind] > 15 ? n[kind] - 14 : 1
+      if (first > 1) print "(" first - 1 " earlier distinct lines omitted)"
+      for (i = first; i <= n[kind]; i++) {
+        key = order[kind, i]
+        print text[kind, key] (count[kind, key] > 1 ? "   [x" count[kind, key] "]" : "")
+      }
+    }'
+}
+
+# Prints the distinct errors of each k3d container's log. k3d's own error
+# only says a node "failed to get ready"; the reason (a crash-looping k3s
+# agent, a resource limit) is in the container log.
+dump_node_logs() {
+  local node
+  while IFS= read -r node; do
+    [ -n "$node" ] || continue
+    echo "----- $node ($(docker inspect -f '{{.State.Status}}, restarts={{.RestartCount}}' "$node" 2>/dev/null || echo unknown)) -----" >&2
+    docker logs "$node" 2>&1 | summarize_node_log | sed 's/^/    /' >&2 || true
+  done <<<"$(docker ps -a --filter "label=k3d.cluster=$CLUSTER_NAME" --format '{{.Names}}' 2>/dev/null | sort)"
+}
+
+# The cluster's server, agent and load balancer containers as "<name> <role>
+# <status>" lines. Other k3d containers (a tools container left behind by an
+# interrupted k3d command) are not restarted by "k3d cluster start" and don't
+# count.
+cluster_node_states() {
+  docker ps -a --filter "label=k3d.cluster=$CLUSTER_NAME" \
+    --format '{{.Names}} {{.Label "k3d.role"}} {{.State}}' 2>/dev/null |
+    awk '$2 == "server" || $2 == "agent" || $2 == "loadbalancer"' | sort
+}
+
+# Waits until every node container is running and stays up. "k3d cluster
+# start --wait" can return while a container is still in Docker's restart
+# loop (a k3s agent or the load balancer that started before its peers were
+# reachable). A node counts as up when it is running, its restart count did
+# not change between two checks 3s apart and, for servers and agents,
+# containerd's socket exists.
+wait_nodes_stable() {
+  local deadline=$((SECONDS + ${1:-120})) snapshot previous="" node role ok
+  while ((SECONDS < deadline)); do
+    ok=1
+    snapshot=""
+    while read -r node role _; do
+      [ -n "$node" ] || continue
+      snapshot+="$node $(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$node" 2>/dev/null) "
+      if [ "$(docker inspect -f '{{.State.Status}}' "$node" 2>/dev/null)" != running ]; then
+        ok=0
+      elif [ "$role" != loadbalancer ] &&
+        ! docker exec "$node" test -S /run/k3s/containerd/containerd.sock >/dev/null 2>&1; then
+        ok=0
+      fi
+    done <<<"$(cluster_node_states)"
+    if ((ok)) && [ "$snapshot" = "$previous" ]; then
+      return 0
+    fi
+    previous=""
+    ((!ok)) || previous="$snapshot"
+    sleep 3
+  done
+  return 1
+}
+
+# Creates the cluster from k3d.yaml, retrying when a node fails to come up.
+# --no-rollback keeps the failed containers so their logs can be printed
+# before the cluster is deleted; k3d would otherwise delete them first and the
+# cause would be lost. One retry covers a node that fails once at start-up
+# (a k3s agent crash-looping on a busy CI runner). Deleting the cluster keeps
+# the WordPress and MariaDB Docker volumes.
+create_cluster() {
+  local attempt=1 attempts="${CLUSTER_CREATE_ATTEMPTS:-2}"
+  while :; do
+    k3d cluster create --config "$ROOT_DIR/k3d.yaml" --no-rollback && return 0
+    echo "ERROR: cluster creation failed (attempt $attempt of $attempts). Node container logs:" >&2
+    dump_node_logs
+    k3d cluster delete "$CLUSTER_NAME" >/dev/null 2>&1 || true
+    ((attempt < attempts)) || die "could not create k3d cluster '$CLUSTER_NAME'."
+    attempt=$((attempt + 1))
+    sleep 5
+    echo "Creating the k3d cluster again (attempt $attempt of $attempts)..."
+  done
+}
+
+# Starts the cluster if any of its containers is stopped (after a Docker
+# restart or "k3d cluster stop"), retrying once from a clean stop when a node
+# fails to come back, then merges its kubeconfig and waits for the API. After a restart k3d sometimes reports the load balancer
+# as restarting and never ready, or returns while k3s agents still
+# crash-loop; the same cluster starts fine a moment later. A cluster whose
+# containers all run is left alone.
 start_existing_cluster() {
-  local _
-  k3d cluster start "$CLUSTER_NAME" >/dev/null
+  local attempt=1 attempts="${CLUSTER_START_ATTEMPTS:-2}" _
+  if awk '$3 != "running" { found = 1 } END { exit !found }' <<<"$(cluster_node_states)"; then
+    until k3d cluster start "$CLUSTER_NAME" --wait --timeout "${CLUSTER_START_TIMEOUT:-300}s" >/dev/null &&
+      wait_nodes_stable "${CLUSTER_STABLE_TIMEOUT:-120}"; do
+      echo "ERROR: cluster start failed (attempt $attempt of $attempts). Node container logs:" >&2
+      dump_node_logs
+      ((attempt < attempts)) || die "could not start k3d cluster '$CLUSTER_NAME'."
+      attempt=$((attempt + 1))
+      k3d cluster stop "$CLUSTER_NAME" >/dev/null 2>&1 || true
+      sleep 5
+      echo "Starting the k3d cluster again (attempt $attempt of $attempts)..."
+    done
+  fi
   k3d kubeconfig merge "$CLUSTER_NAME" --kubeconfig-merge-default >/dev/null
   echo "Waiting for the Kubernetes API..."
   for _ in $(seq 1 60); do

@@ -18,15 +18,20 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # shellcheck, php and kubectl are preinstalled on the runner image. The
-      # checksum is the one published in the v0.6.7 release's CHECKSUMS file.
+      # checksum is the one published in the v0.7.0 release's CHECKSUMS file.
       - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.7.0
+          KUBECONFORM_SHA256: c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3
         run: |
-          curl -fsSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
-          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  kubeconform.tar.gz" | sha256sum -c -
+          curl -fsSLo kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
           sudo tar -xzf kubeconform.tar.gz -C /usr/local/bin kubeconform
           rm kubeconform.tar.gz
 
@@ -38,12 +43,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      # The install script is taken from the same tag as the binary, so neither
-      # changes underneath CI.
-      - name: Install k3d
-        run: curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.8.3/install.sh | TAG=v5.8.3 bash
+      - uses: ./.github/actions/setup-k3d
 
       - name: Start the lab
         run: ./start.sh
@@ -69,6 +71,9 @@ jobs:
           kubectl get pods -n kube-system -o wide
           kubectl describe pods -n wordpress-poc
           kubectl get events -A --sort-by=.lastTimestamp | tail -n 80
+          echo "::group::k3d containers"
+          docker ps -a --filter label=k3d.cluster=wordpress-ha-poc
+          echo "::endgroup::"
           for pod in $(kubectl get pods -n wordpress-poc -o name); do
             echo "::group::logs $pod"
             kubectl logs -n wordpress-poc "$pod" --all-containers=true --prefix --tail=200
