@@ -34,6 +34,19 @@ spec:
                 app.kubernetes.io/name: traefik
             topologyKey: kubernetes.io/hostname
 
+    # On SIGTERM Traefik would otherwise stop accepting connections at once,
+    # while kube-proxy on each node keeps routing new ones to it until the
+    # endpoint update arrives. During requestAcceptGraceTimeout it still
+    # accepts them but reports not-ready, so it leaves the endpoints first;
+    # graceTimeOut then lets in-flight requests finish. Both fit in the chart's
+    # 60s termination grace period.
+    ports:
+      web:
+        transport:
+          lifeCycle:
+            requestAcceptGraceTimeout: 5s
+            graceTimeOut: 10s
+
     podDisruptionBudget:
       enabled: true
       minAvailable: 2

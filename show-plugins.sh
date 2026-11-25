@@ -10,6 +10,7 @@ require_cluster
 echo "Latest bootstrap plugin inventory:"
 # The table is produced with --skip-plugins, so it has no plugin notices;
 # the filter only hides Deprecated: lines from older bootstrap revisions.
-kubectl logs -n "$NS" job/wordpress-bootstrap |
-  grep -v '^Deprecated:' |
-  sed -n '/Installed plugins:/,$p'
+# sed, unlike grep -v, doesn't fail when nothing is left to print.
+job_logs wordpress-bootstrap |
+  sed -n '/Installed plugins:/,$p' |
+  sed '/^Deprecated:/d'

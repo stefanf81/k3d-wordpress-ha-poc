@@ -26,7 +26,7 @@ versions:
 	bash ./versions.sh
 
 arch:
-	bash ./verify-arm64.sh
+	bash ./verify-arch.sh
 
 plugins:
 	bash ./show-plugins.sh

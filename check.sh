@@ -12,19 +12,23 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_cluster
 
-# Pinned "slug version" pairs from plugins.txt (blank lines, comments and
-# @latest entries skipped).
+# Pinned "slug version" pairs from plugins.txt, parsed like wp-cli.sh does:
+# comments and surrounding whitespace dropped, blank and @latest entries
+# skipped.
 pinned_plugins() {
   tr -d '\r' <"$ROOT_DIR/k8s/bootstrap/plugins.txt" |
-    awk -F@ 'NF == 2 && $1 !~ /^#/ && $2 != "latest" { print $1, $2 }'
+    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
+    awk -F@ 'NF == 2 && $1 != "" && $2 != "latest" { print $1, $2 }'
 }
 
+# Featured images are not part of the snapshot: their download is
+# best-effort, and a repeated bootstrap deliberately fills in any that failed
+# before. They are checked separately below.
 content_snapshot() {
   mariadb_query "
     SELECT CONCAT_WS(' ',
       (SELECT COUNT(*) FROM wp_posts WHERE post_type = 'page' AND post_status = 'publish'),
       (SELECT COUNT(*) FROM wp_posts WHERE post_type = 'post' AND post_status = 'publish'),
-      (SELECT COUNT(*) FROM wp_posts WHERE post_type = 'attachment'),
       (SELECT COUNT(*) FROM wp_posts WHERE post_type = 'wpcf7_contact_form'),
       (SELECT COUNT(*) FROM wp_users),
       (SELECT COUNT(*) FROM wp_comments WHERE comment_approved = '1'),
@@ -39,16 +43,25 @@ content_snapshot() {
 }
 
 describe_snapshot() {
-  local pages posts media forms users comments menus items
-  read -r pages posts media forms users comments menus items <<<"$1"
-  echo "pages=$pages posts=$posts media=$media forms=$forms users=$users comments=$comments primary_menus=$menus primary_menu_items=$items"
+  local pages posts forms users comments menus items
+  read -r pages posts forms users comments menus items <<<"$1"
+  echo "pages=$pages posts=$posts forms=$forms users=$users comments=$comments primary_menus=$menus primary_menu_items=$items"
+}
+
+# Seeded posts that have a featured image.
+featured_images() {
+  mariadb_query "
+    SELECT COUNT(*) FROM wp_postmeta m
+      JOIN wp_posts p ON p.ID = m.post_id
+     WHERE m.meta_key = '_thumbnail_id' AND p.post_type = 'post';"
 }
 
 echo "== Bootstrap idempotency"
 before="$(content_snapshot)"
-echo "Before: $(describe_snapshot "$before")"
+images_before="$(featured_images)"
+echo "Before: $(describe_snapshot "$before") featured_images=$images_before"
 
-read -r _ _ _ _ _ _ menus _ <<<"$before"
+read -r _ _ _ _ _ menus _ <<<"$before"
 [ "$menus" = "1" ] || fail "expected exactly 1 Primary menu, found $menus"
 
 log_file="$(mktemp)"
@@ -56,10 +69,15 @@ trap 'rm -f "$log_file"' EXIT
 bash "$ROOT_DIR/reconfigure.sh" | tee "$log_file"
 
 after="$(content_snapshot)"
+images_after="$(featured_images)"
 echo
-echo "After:  $(describe_snapshot "$after")"
+echo "After:  $(describe_snapshot "$after") featured_images=$images_after"
 [ "$before" = "$after" ] ||
   fail "a repeated bootstrap changed content counts"
+# A post keeps its featured image once it has one, so the count can only
+# grow (when an earlier download failed).
+[ "$images_after" -ge "$images_before" ] ||
+  fail "a repeated bootstrap removed featured images ($images_before -> $images_after)"
 
 # WP-CLI prints the table tab-separated when stdout isn't a terminal and with
 # ASCII borders otherwise; strip the borders so both parse the same way.
@@ -95,7 +113,8 @@ cron_job="wp-cron-check-$(date +%s)"
 trap 'rm -f "$log_file"; kubectl delete job "$cron_job" -n "$NS" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true' EXIT
 kubectl create job "$cron_job" -n "$NS" --from=cronjob/wordpress-cron >/dev/null
 wait_for_job "$cron_job" 480 || fail "the WP-Cron Job failed"
-kubectl logs -n "$NS" "job/$cron_job" | grep -q "WordPress cron trigger completed." ||
+cron_log="$(job_logs "$cron_job")"
+grep -q "WordPress cron trigger completed." <<<"$cron_log" ||
   fail "the WP-Cron Job did not trigger wp-cron.php"
 echo "WP-Cron ran successfully."
 

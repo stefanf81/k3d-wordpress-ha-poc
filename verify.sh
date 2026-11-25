@@ -13,12 +13,14 @@ echo "Checking Kubernetes nodes..."
 workers="$(kubectl get nodes -l workload=wordpress --no-headers | wc -l | tr -d ' ')"
 [ "$workers" = "3" ] || fail "expected 3 WordPress workers, found $workers"
 
-echo "Checking that the site is published on localhost only..."
-lb_bindings="$(docker port "k3d-${CLUSTER_NAME}-serverlb" 80/tcp 2>/dev/null || true)"
+echo "Checking that the site and API are published on localhost only..."
+lb_bindings="$(published_site_bindings)"
 [ -n "$lb_bindings" ] || fail "k3d load balancer does not publish port 80"
+grep -q ":${SITE_PORT}\$" <<<"$lb_bindings" ||
+  fail "site is published on $(tr '\n' ' ' <<<"$lb_bindings")but SITE_URL uses port $SITE_PORT; recreate with ./stop.sh && ./start.sh"
 exposed="$(published_beyond_localhost)"
 [ -z "$exposed" ] ||
-  fail "site is published beyond localhost ($(tr '\n' ' ' <<<"$exposed")); recreate with ./stop.sh && ./start.sh"
+  fail "ports are published beyond localhost ($(tr '\n' ' ' <<<"$exposed")); recreate with ./stop.sh && ./start.sh"
 
 echo "Checking Traefik HA..."
 traefik_available="$(

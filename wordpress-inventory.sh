@@ -7,6 +7,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_cluster
+require_secrets_applied
 
 kubectl apply -f "$ROOT_DIR/k8s/security.yaml" >/dev/null
 kubectl delete job wordpress-inventory \
@@ -20,9 +21,7 @@ wait_for_job wordpress-inventory "$INVENTORY_TIMEOUT"
 mkdir -p "$ROOT_DIR/reports/inventory"
 REPORT="$ROOT_DIR/reports/inventory/wordpress-inventory-$(date +%Y%m%d%H%M%S).txt"
 
-kubectl logs \
-  -n "$NS" \
-  job/wordpress-inventory | tee "$REPORT"
+job_logs wordpress-inventory | tee "$REPORT"
 
 echo
 echo "Inventory saved:"

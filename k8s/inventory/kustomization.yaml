@@ -4,8 +4,15 @@ kind: Kustomization
 namespace: wordpress-poc
 
 resources:
+  - ../secrets
   - ../wp-config
   - job.yaml
+
+# Generated objects are labelled so ./start.sh can delete superseded
+# hash-named copies.
+generatorOptions:
+  labels:
+    k3d-wordpress-ha-poc/generated: "true"
 
 configMapGenerator:
   # The Job is recreated on every run, so a stable name is enough.

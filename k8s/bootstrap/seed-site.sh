@@ -104,6 +104,7 @@ user_ensure() {
   id="$(wp user get "$login" --field=ID 2>/dev/null || true)"
 
   if [ -z "$id" ]; then
+    # Known PoC password, listed in the README with the admin login.
     id="$(wpf user create "$login" "$email" \
       --role=author \
       --display_name="$display" \

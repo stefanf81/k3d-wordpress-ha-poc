@@ -7,6 +7,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_cluster
+require_secrets_applied
 
 echo "Re-running WordPress/plugin bootstrap..."
 run_bootstrap

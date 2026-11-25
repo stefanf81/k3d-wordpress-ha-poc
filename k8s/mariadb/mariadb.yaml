@@ -24,6 +24,48 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+      # The image applies the credential variables only when it initializes
+      # an empty datadir. This sets them on an existing one, so editing
+      # k8s/secrets/ and re-running ./start.sh changes the real passwords.
+      initContainers:
+        - name: reconcile-credentials
+          image: mariadb:12.3.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - /scripts/reconcile-credentials.sh
+          envFrom:
+            - secretRef:
+                name: mariadb-root
+          env:
+            - name: MARIADB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-database
+                  key: WORDPRESS_DB_NAME
+            - name: MARIADB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-database
+                  key: WORDPRESS_DB_USER
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wordpress-database
+                  key: WORDPRESS_DB_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
       containers:
         - name: mariadb
           image: mariadb:12.3.2
@@ -115,6 +157,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: mariadb-data
+        - name: scripts
+          configMap:
+            name: mariadb-scripts
 ---
 apiVersion: v1
 kind: Service

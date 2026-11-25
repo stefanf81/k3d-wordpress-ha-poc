@@ -34,7 +34,9 @@ copy_wordpress_files() {
 }
 
 # Fails, rather than waiting forever, when the shared volume is read-only or full.
-exec 9>"$LOCK" || {
+# "command" keeps a failed redirection from exiting the shell before the
+# message is printed.
+command exec 9>"$LOCK" || {
   echo "ERROR: cannot open $LOCK" >&2
   exit 1
 }
@@ -67,4 +69,6 @@ exec 9>&-
 rm -f "$SHARED/wp-config.php" "$SHARED/healthz.php"
 
 test -f "$SHARED/wp-includes/version.php"
+# Recreated as root if someone deleted it, so hand it back to Apache.
 mkdir -p "$SHARED/wp-content/mu-plugins"
+chown 33:33 "$SHARED/wp-content/mu-plugins"

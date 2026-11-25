@@ -28,6 +28,17 @@ spec:
   hostPath:
     path: /var/lib/wordpress-shared
     type: DirectoryOrCreate
+  # Only the workers mount the Docker volume. On any other node this hostPath
+  # would be an empty local directory, so a pod there would silently see a
+  # different tree.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: workload
+              operator: In
+              values:
+                - wordpress
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

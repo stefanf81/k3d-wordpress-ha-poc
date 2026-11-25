@@ -4,8 +4,15 @@ kind: Kustomization
 namespace: wordpress-poc
 
 resources:
+  - ../secrets
   - ../wp-config
   - wordpress.yaml
+
+# Generated objects are labelled so ./start.sh can delete superseded
+# hash-named copies.
+generatorOptions:
+  labels:
+    k3d-wordpress-ha-poc/generated: "true"
 
 configMapGenerator:
   # The generated name carries a content hash, so editing any of these files

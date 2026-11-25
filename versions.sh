@@ -57,5 +57,5 @@ docker volume inspect "$WORDPRESS_SHARED_VOLUME" \
 echo
 
 echo "=== Managed plugins ==="
-kubectl logs -n "$NS" job/wordpress-bootstrap |
+job_logs wordpress-bootstrap |
   sed -n '/Installed plugins:/,$p'

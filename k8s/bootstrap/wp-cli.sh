@@ -5,6 +5,11 @@ set -eu
 
 cd /var/www/html
 
+# Same normalization as lib.sh: no carriage return (CRLF site.env) and no
+# trailing slash, which would otherwise end up in every generated URL.
+SITE_URL="$(printf '%s' "$SITE_URL" | tr -d '\r')"
+SITE_URL="${SITE_URL%/}"
+
 echo "Waiting for the shared WordPress files..."
 i=0
 # The WordPress init container writes the marker after its copy completes.
@@ -31,6 +36,31 @@ else
     --skip-email
 fi
 
+# wp core install applies the admin settings only once. Keep the account in
+# line with site.env and the wordpress-admin Secret on every run. The password
+# is only rewritten when it differs, because a new hash logs the admin out.
+echo "Reconciling the administrator account..."
+if ! wp user get "$ADMIN_USER" --field=ID >/dev/null 2>&1; then
+  wp user create "$ADMIN_USER" "$ADMIN_EMAIL" \
+    --role=administrator \
+    --user_pass="$ADMIN_PASSWORD" >/dev/null
+  echo "Created administrator $ADMIN_USER."
+fi
+wp user set-role "$ADMIN_USER" administrator >/dev/null
+if [ "$(wp user get "$ADMIN_USER" --field=user_email)" != "$ADMIN_EMAIL" ]; then
+  wp user update "$ADMIN_USER" --user_email="$ADMIN_EMAIL" --skip-email >/dev/null
+fi
+# Compared in PHP, which reads the password from the environment rather than
+# the command line.
+if ! wp eval '
+  $user = get_user_by( "login", getenv( "ADMIN_USER" ) );
+  exit( $user && wp_check_password( getenv( "ADMIN_PASSWORD" ), $user->user_pass, $user->ID ) ? 0 : 1 );
+' >/dev/null 2>&1; then
+  wp user update "$ADMIN_USER" --user_pass="$ADMIN_PASSWORD" --skip-email >/dev/null
+  echo "Updated the password of $ADMIN_USER."
+fi
+wp option update admin_email "$ADMIN_EMAIL" >/dev/null
+
 echo "Reconciling WordPress core..."
 if [ "$WORDPRESS_CORE_VERSION" = "latest" ]; then
   wp core update
@@ -54,11 +84,9 @@ wp rewrite structure '/%postname%/' --hard
 
 echo "Reconciling plugins..."
 while IFS= read -r spec || [ -n "$spec" ]; do
-  # Trim CR and ignore blanks/comments.
-  spec="$(printf '%s' "$spec" | tr -d '\r')"
-  case "$spec" in
-    ""|\#*) continue ;;
-  esac
+  # Drop CR, comments (whole-line or trailing) and surrounding whitespace.
+  spec="$(printf '%s' "$spec" | tr -d '\r' | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [ -n "$spec" ] || continue
 
   case "$spec" in
     *@*)

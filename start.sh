@@ -80,36 +80,51 @@ EOF
     fi
   done
 
+  # The node image is fixed when a cluster is created as well.
+  server_image="$(docker inspect "k3d-${CLUSTER_NAME}-server-0" --format '{{.Config.Image}}' 2>/dev/null || true)"
+  if [ -n "$server_image" ] && [ "$server_image" != "$K3S_IMAGE" ]; then
+    echo "WARNING: this cluster runs $server_image, not $K3S_IMAGE." >&2
+    echo "Recreate it with ./stop.sh && ./start.sh to switch (data is preserved)." >&2
+  fi
+
   # A stopped cluster (after ./stop.sh or a Docker restart) has no API server.
   # Starting it and merging its kubeconfig makes the reuse path work either way.
   echo "Starting k3d cluster '$CLUSTER_NAME' if its nodes are stopped..."
-  k3d cluster start "$CLUSTER_NAME" >/dev/null
-  k3d kubeconfig merge "$CLUSTER_NAME" --kubeconfig-merge-default >/dev/null
+  start_existing_cluster
 
   # Checked only now: a stopped load balancer has no published ports to read.
+  require_site_port_published
   exposed="$(published_beyond_localhost)"
   if [ -n "$exposed" ]; then
-    echo "WARNING: this cluster publishes the site beyond localhost:" >&2
+    echo "WARNING: this cluster publishes ports beyond localhost:" >&2
     while IFS= read -r binding; do
       echo "  $binding" >&2
     done <<<"$exposed"
     echo "Recreate it with ./stop.sh && ./start.sh (data is preserved)." >&2
   fi
 
-  echo "Waiting for the Kubernetes API..."
-  api_ready=0
-  for _ in $(seq 1 60); do
-    if kubectl get --raw=/readyz >/dev/null 2>&1; then
-      api_ready=1
-      break
-    fi
-    sleep 3
-  done
-  [ "$api_ready" = "1" ] || die "the Kubernetes API of '$CLUSTER_NAME' did not become ready."
-
   echo "Reusing existing k3d cluster '$CLUSTER_NAME'."
   command kubectl config use-context "$KUBE_CONTEXT" >/dev/null
 else
+  # A database from an older revision that bind-mounted ./data/mariadb. A new
+  # volume would start an empty site on top of the old WordPress files, and
+  # the old database would no longer be reachable from any cluster.
+  if ! docker volume inspect "$MARIADB_DATA_VOLUME" >/dev/null 2>&1 &&
+    dir_has_entries "$LEGACY_MARIADB_DIR"; then
+    cat >&2 <<EOF
+ERROR: ./data/mariadb holds a database from an older revision of this lab,
+and the MariaDB Docker volume '$MARIADB_DATA_VOLUME' doesn't exist yet.
+
+Migrate that database onto the volume (this works with or without the old
+cluster, and keeps ./data/mariadb plus an SQL backup under ./backups/):
+  ./migrate-mariadb-to-named-volume.sh
+
+To discard it and start a fresh lab instead:
+  ./reset.sh
+EOF
+    exit 1
+  fi
+
   if docker volume inspect "$MARIADB_DATA_VOLUME" >/dev/null 2>&1; then
     echo "Reusing MariaDB Docker named volume '$MARIADB_DATA_VOLUME'."
   else
@@ -169,13 +184,14 @@ echo "Creating namespace and storage..."
 kubectl apply -f "$ROOT_DIR/k8s/storage.yaml"
 
 echo
-echo "Applying secrets, service accounts and network policy..."
-kubectl apply -f "$ROOT_DIR/k8s/secrets.yaml"
+echo "Applying service accounts and network policy..."
 kubectl apply -f "$ROOT_DIR/k8s/security.yaml"
 
+# The kustomization also creates the Secrets. MariaDB restarts when one of
+# its Secrets changed, and its init container sets the new credentials.
 echo
 echo "Starting MariaDB..."
-kubectl apply -f "$ROOT_DIR/k8s/mariadb.yaml"
+kubectl apply -k "$ROOT_DIR/k8s/mariadb"
 kubectl rollout status deployment/mariadb \
   -n "$NS" \
   --timeout=300s
@@ -217,13 +233,17 @@ echo
 echo "PVCs:"
 kubectl get pvc -n "$NS"
 
+echo
+echo "Removing superseded generated ConfigMaps and Secrets..."
+prune_generated_objects
+
 cat <<EOF
 
 Ready.
 Open:  $SITE_URL
 Admin: $SITE_URL/wp-admin/
 Default PoC login: admin / admin-poc-change-me
-  (k8s/bootstrap/site.env and k8s/secrets.yaml)
+  (k8s/bootstrap/site.env and k8s/secrets/admin.env)
 
 Verify the lab:
   ./verify.sh

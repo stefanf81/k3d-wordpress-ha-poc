@@ -24,8 +24,10 @@ Username: admin
 Password: admin-poc-change-me
 ```
 
-These credentials are disposable PoC values. The site and the Kubernetes API
-are bound to `127.0.0.1` only, so nothing is published on your network.
+These credentials are disposable PoC values. The three demo authors
+(`elena.rossi`, `samir.patel`, `noor.janssens`) log in with
+`northstar-author-poc`. The site and the Kubernetes API are bound to
+`127.0.0.1` only, so nothing is published on your network.
 
 ## Requirements
 
@@ -55,7 +57,7 @@ installed; missing tools are skipped.
 | `make inventory`       | `./wordpress-inventory.sh`           | Save core/plugin/theme versions to `./reports/inventory/` |
 | `make plugins`         | `./show-plugins.sh`                  | Show the plugin table from the latest bootstrap |
 | `make versions`        | `./versions.sh`                      | Show tool, k3s, image and application versions |
-| `make arch`            | `./verify-arm64.sh`                  | Show node architectures and the PHP build |
+| `make arch`            | `./verify-arch.sh`                   | Show node architectures and the PHP build |
 | `make lint`            | `./lint.sh`                          | Static checks; no cluster needed |
 | `make down`            | `./stop.sh`                          | Delete the cluster, keep WordPress files and the database |
 | `make reset`           | `./reset.sh`                         | Delete everything (except `./backups/`) and start fresh |
@@ -115,10 +117,12 @@ k3d.yaml                 cluster: 1 server, 3 agents, ports, volumes, k3s flags
 lib.sh                   shared settings and helpers for every script
 k8s/
   storage.yaml           namespace (Pod Security labels), PVs and PVCs
-  secrets.yaml           PoC credentials and WordPress salts
   security.yaml          service accounts and network policies
-  mariadb.yaml           MariaDB Deployment and Service
   traefik-config.yaml    HelmChartConfig for the bundled Traefik
+  secrets/               PoC credentials and WordPress salts (*.env), built
+                         into Secrets by every kustomization that uses them
+  mariadb/               kustomization: MariaDB Deployment, Service and the
+                         credential-reconcile init script
   wordpress/             kustomization: Deployment, PDB, Service, Ingress,
                          WP-Cron CronJob, healthz.php and the init-container
                          script
@@ -130,12 +134,13 @@ k8s/
 .github/workflows/ci.yaml  lint plus an end-to-end k3d smoke test
 ```
 
-Scripts, PHP and page content are real files. Kustomize's
-`configMapGenerator` turns them into ConfigMaps (`kubectl apply -k`), so they
-can be linted, diffed and reviewed like any other code. The WordPress
-ConfigMap names carry a content hash: editing `wp-config.php`,
-`healthz.php` or the init script and re-running `./start.sh` rolls the
-WordPress Deployment. The WP-CLI Jobs build `wp-config.php` from the same
+Scripts, PHP, page content and credentials are real files. Kustomize's
+`configMapGenerator` and `secretGenerator` turn them into ConfigMaps and
+Secrets (`kubectl apply -k`), so they can be linted, diffed and reviewed like
+any other code. The WordPress and MariaDB ConfigMap and Secret names carry a
+content hash: editing `wp-config.php`, `healthz.php`, an init script or a
+credential and re-running `./start.sh` rolls the Deployments that use it.
+`./start.sh` then deletes the superseded copies. The WP-CLI Jobs build `wp-config.php` from the same
 `k8s/wp-config/` directory, so they always run with the config in git. Each
 replica mounts its own copy of the config, so replicas still running the
 previous revision keep the config they started with until they are replaced.
@@ -149,7 +154,7 @@ previous revision keep the config they started with until they are replaced.
 | Extra WP-CLI settings (run last, every reconcile) | `k8s/bootstrap/after-install.sh` |
 | Plugin configuration | `k8s/bootstrap/configure-plugins.php` |
 | Demo content | `k8s/bootstrap/seed-site.sh`, `k8s/bootstrap/contact.html` |
-| Passwords and salts | `k8s/secrets.yaml` |
+| Passwords and salts | `k8s/secrets/*.env` (apply with `./start.sh`) |
 | WordPress runtime config | `k8s/wp-config/wp-config.php` |
 
 After editing anything under `k8s/bootstrap/`:
@@ -161,6 +166,22 @@ After editing anything under `k8s/bootstrap/`:
 This recreates only the WP-CLI bootstrap Job. It does not rebuild the cluster
 or restart the WordPress replicas. If the bootstrap fails, the script prints
 the Job's logs and exits non-zero.
+
+After editing anything under `k8s/secrets/`, run `./start.sh` instead
+(`./reconfigure.sh` refuses to run until you do). It restarts MariaDB and the
+WordPress replicas with the new values, and they take effect on an existing
+site too:
+
+- Database and root passwords: MariaDB's image applies them only when it
+  creates an empty datadir, so an init container sets them on the existing
+  one before MariaDB starts. A new `WORDPRESS_DB_NAME` or `WORDPRESS_DB_USER`
+  is created rather than renamed; a new database name therefore starts an
+  empty site (the old database stays in MariaDB).
+- Administrator: every bootstrap makes `ADMIN_USER` an administrator with
+  `ADMIN_EMAIL` and the `ADMIN_PASSWORD` from `k8s/secrets/admin.env`. The
+  password is only rewritten when it differs, because a new hash logs the
+  admin out. A renamed `ADMIN_USER` gets a new account; the old one stays.
+- Salts: all replicas restart with the new keys, which logs everyone out.
 
 Environment overrides for `./start.sh` and the other scripts:
 
@@ -174,6 +195,12 @@ k3s is pinned by default (`rancher/k3s:v1.36.2-k3s1`, set in `lib.sh`) so the
 Kubernetes runtime doesn't change underneath the lab. Use the same
 `MARIADB_DATA_VOLUME` and `WORDPRESS_SHARED_VOLUME` with every script when you
 override them.
+
+The node image and the published port (from `SITE_URL`) are fixed when the
+cluster is created. After changing either, run `./stop.sh && ./start.sh`; the
+data is kept. `./start.sh` warns when an existing cluster runs another k3s
+image, and stops when it publishes the site on another port, because
+WordPress would redirect every request to the unpublished one.
 
 ### WordPress core version
 
@@ -318,7 +345,8 @@ This lab avoids NFS, Ceph or Longhorn. The Docker named volume
 `wordpress-ha-poc-wordpress-shared` is mounted into **all three k3d worker
 containers** at `/var/lib/wordpress-shared`, and Kubernetes exposes that path
 through an RWX `hostPath` PV, so all WordPress pods see the same physical
-files.
+files. The PV's node affinity keeps its pods on the workers: on the server
+node the same path would be an empty local directory.
 
 Do not copy this pattern to a real multi-machine cluster: there, identical
 hostPath strings point to different disks.
@@ -347,9 +375,8 @@ Each replica's init container prepares the tree before Apache starts:
   `/var/www/wp-config.php`, one level above the WordPress root, where
   WordPress and WP-CLI look for it when the root has none. `healthz.php` is
   served by an Apache alias to the read-only ConfigMap mount at `/config`.
-  Both mounts sit outside the shared volume. Those `subPath`/alias mounts are
-  not yet verified on a live cluster: run `./start.sh` and `./verify.sh` after
-  changing them.
+  Both mounts sit outside the shared volume; `./verify.sh` checks both in
+  every replica.
 - Older revisions copied `wp-config.php` and `healthz.php` into the shared
   tree. The init container deletes those copies, because a copy there would
   take precedence over the per-pod mounts.
@@ -382,25 +409,32 @@ return `0`.
 
 Older revisions stored MariaDB in `./data/mariadb`. Don't raw-copy that
 datadir into the named volume: `lower_case_table_names` is fixed when a
-datadir is initialized, so migrate logically. With the old cluster still
-running:
+datadir is initialized, so migrate logically:
 
 ```bash
 ./migrate-mariadb-to-named-volume.sh     # or: make migrate-db
 ```
 
+This works whether or not the old cluster still exists. `./start.sh` refuses
+to create a cluster while `./data/mariadb` holds a database and the MariaDB
+volume doesn't exist yet, so the old database can't be left behind by
+accident.
+
 The helper:
 
 1. checks that the target volume doesn't exist yet
-2. creates a logical SQL dump under `./backups/`
-3. deletes the old k3d cluster and creates a fresh named volume
-4. recreates the lab on it
+2. creates a logical SQL dump under `./backups/`: from the old cluster's
+   MariaDB pod, or, when that cluster is gone, from a temporary MariaDB
+   container started on `./data/mariadb` (without grant checks or network,
+   so the old passwords aren't needed)
+3. deletes the old k3d cluster, if any, and creates a fresh named volume
+4. recreates the lab on it, importing `./data/wordpress` if present
 5. restores the SQL dump
 6. reconciles WordPress, plugins and content
 7. verifies `@@lower_case_table_names = 0` and runs `./verify.sh`
 
-The SQL backup is kept after a successful migration, and its location is
-printed if any later step fails.
+The SQL backup and `./data/mariadb` are kept after a successful migration,
+and the backup's location is printed if any later step fails.
 
 ## Health checks
 
@@ -416,7 +450,9 @@ restarting every web container.
 
 **MariaDB** startup and readiness run an authenticated `SELECT 1` with the
 WordPress account, so a credential problem makes MariaDB NotReady without a
-restart loop. Liveness checks the Unix socket and PID 1 locally: a TCP probe
+restart loop. Before MariaDB starts, its `reconcile-credentials` init
+container sets the accounts in an existing datadir to the Secret values (see
+[Configuration](#configuration)). Liveness checks the Unix socket and PID 1 locally: a TCP probe
 would log `Aborted connection ... unauthenticated` every period. A single
 initial startup-probe failure (`Can't connect to server on 127.0.0.1`) is
 expected while the server starts.
@@ -455,6 +491,12 @@ With the Traefik PDB (`minAvailable: 2`), a rollout goes 3 ready -> remove
 one old pod -> 2 ready -> replacement on the freed worker -> 3 ready, and
 repeats. That keeps one-per-worker placement without deadlocking.
 
+A stopping Traefik pod keeps accepting connections for 5 seconds
+(`requestAcceptGraceTimeout`) while reporting not-ready, so it leaves the
+Service endpoints before it stops listening, then gives in-flight requests
+10 seconds (`graceTimeOut`). Without that, kube-proxy would briefly keep
+sending new connections to a pod that already refuses them.
+
 Images use `imagePullPolicy: IfNotPresent`, so restarting or replacing a pod
 in a running cluster needs no registry access, and failover tests also work
 offline. Floating tags (`wordpress:php8.5-apache`, `wordpress:cli-php8.5`)
@@ -466,8 +508,8 @@ are pulled fresh whenever the cluster is recreated (`./stop.sh && ./start.sh`);
 - The site (`127.0.0.1:8080`) and the Kubernetes API are bound to localhost.
   The lab ships known credentials, debug settings and deliberately old plugin
   versions, so it must not be reachable from your network. `./start.sh` warns,
-  and `./verify.sh` fails, if an existing cluster still publishes beyond
-  localhost; recreate it with `./stop.sh && ./start.sh`.
+  and `./verify.sh` fails, if an existing cluster still publishes the site or
+  the API beyond localhost; recreate it with `./stop.sh && ./start.sh`.
 - The namespace **enforces Pod Security `baseline`** and audits/warns against
   `restricted`. The WP-CLI Jobs and the WP-Cron Job meet `restricted` (numeric
   non-root user, no privilege escalation, all capabilities dropped,
@@ -494,6 +536,10 @@ make check            # bootstrap idempotency, file ownership, WP-Cron, inventor
 make test-ha          # delete a WordPress pod while requesting the site
 make test-ingress-ha  # delete a Traefik pod while requesting the site
 ```
+
+`make check` compares content counts before and after a repeated bootstrap.
+Featured images are compared separately and may only grow, because a repeated
+bootstrap fills in any whose download failed before.
 
 The failover tests request `http://localhost:8080` once a second while the pod
 is replaced. They fail if any request doesn't get a 2xx/3xx answer, then wait
@@ -582,16 +628,22 @@ This deletes the cluster, both volumes and any legacy `./data/wordpress` and
 
 Runtime data (`data/`, `backups/`, `reports/`) is ignored by Git.
 
-**Upgrading from an older revision:** run `./stop.sh && ./start.sh` once. A
-cluster's published ports and node mounts can't change in place, so this is what
-moves the site to `127.0.0.1` and onto the WordPress volume. Your data is kept:
-`./start.sh` copies `./data/wordpress` into the new volume, leaving the
-directory untouched so you can delete it once the site works. The init
-container then adopts the copied tree, adds any missing core files without
-overwriting updates, and resets ownership to uid 33. A database still in
-`./data/mariadb` needs the separate
-[migration](#migrate-an-existing-bind-mounted-database), which also carries the
-WordPress files over.
+**Upgrading from an older revision:**
+
+- If `./data/mariadb` exists, run `./migrate-mariadb-to-named-volume.sh`
+  first, with or without the old cluster; it also carries the WordPress files
+  over. `./start.sh` stops with this advice instead of creating an empty
+  database.
+- Otherwise run `./stop.sh && ./start.sh` once. A cluster's published ports
+  and node mounts can't change in place, so this is what moves the site to
+  `127.0.0.1` and onto the WordPress volume. Your data is kept: `./start.sh`
+  copies `./data/wordpress` into the new volume, leaving the directory
+  untouched so you can delete it once the site works. The init container then
+  adopts the copied tree, adds any missing core files without overwriting
+  updates, and resets ownership to uid 33.
+
+Revisions that kept credentials in `k8s/secrets.yaml` need no extra step:
+`./start.sh` applies the hash-named Secrets and deletes the old ones.
 
 ## Intentional trade-offs
 
@@ -621,6 +673,12 @@ application images for plugin/theme code, TLS and stricter egress controls.
 - **`./start.sh` reports an unexpected WordPress mount**: the cluster came from
   a revision that bind-mounted `./data/wordpress`; run `./stop.sh && ./start.sh`
   and the files are imported into the volume.
-- **`./start.sh` reports an unexpected MariaDB mount**: the cluster came from a
-  revision that used `./data/mariadb`; see
+- **`./start.sh` reports an unexpected MariaDB mount, or a database in
+  `./data/mariadb`**: the lab came from a revision that used `./data/mariadb`;
+  see
   [Migrate an existing bind-mounted database](#migrate-an-existing-bind-mounted-database).
+- **`./start.sh` says the cluster publishes the site on another port**:
+  `SITE_URL` in `k8s/bootstrap/site.env` changed; run
+  `./stop.sh && ./start.sh`.
+- **`./reconfigure.sh` says `k8s/secrets/` changed**: run `./start.sh`, which
+  applies the new credentials to MariaDB and the replicas first.

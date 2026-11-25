@@ -17,7 +17,8 @@
   # scripts and the installed site cannot disagree. SITE_PORT feeds the k3d
   # port mapping in k3d.yaml.
   # tr drops the carriage return of a CRLF file. The trailing slash goes too,
-  # so "$SITE_URL/" is always a valid URL.
+  # so "$SITE_URL/" is always a valid URL. wp-cli.sh normalizes it the same
+  # way.
   SITE_URL="$(sed -n 's/^SITE_URL=//p' "$ROOT_DIR/k8s/bootstrap/site.env" | tr -d '\r')"
   SITE_URL="${SITE_URL%/}"
   [ -n "$SITE_URL" ] || {
@@ -44,8 +45,10 @@
   K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.36.2-k3s1}"
   MARIADB_DATA_VOLUME="${MARIADB_DATA_VOLUME:-wordpress-ha-poc-mariadb-data}"
   WORDPRESS_SHARED_VOLUME="${WORDPRESS_SHARED_VOLUME:-wordpress-ha-poc-wordpress-shared}"
-  # Where older revisions kept the shared tree as a host bind mount.
+  # Where older revisions kept the shared tree and the MariaDB datadir as
+  # host bind mounts.
   LEGACY_WORDPRESS_DIR="$ROOT_DIR/data/wordpress"
+  LEGACY_MARIADB_DIR="$ROOT_DIR/data/mariadb"
 
   # Waits are a little longer than each Job's activeDeadlineSeconds, so the
   # Job's own deadline is what reports a hang. The WordPress Deployment's
@@ -80,6 +83,30 @@ cluster_exists() {
   k3d cluster get "$CLUSTER_NAME" >/dev/null 2>&1
 }
 
+# Succeeds if directory $1 exists and has entries. A directory that can't be
+# listed (root-owned files from an older revision) counts as having entries,
+# so it is never mistaken for an empty one.
+dir_has_entries() {
+  local entries
+  [ -e "$1" ] || return 1
+  entries="$(ls -A "$1" 2>/dev/null)" || return 0
+  [ -n "$entries" ]
+}
+
+# Starts the cluster if its nodes are stopped (after a Docker restart, say),
+# merges its kubeconfig and waits for the API.
+start_existing_cluster() {
+  local _
+  k3d cluster start "$CLUSTER_NAME" >/dev/null
+  k3d kubeconfig merge "$CLUSTER_NAME" --kubeconfig-merge-default >/dev/null
+  echo "Waiting for the Kubernetes API..."
+  for _ in $(seq 1 60); do
+    kubectl get --raw=/readyz >/dev/null 2>&1 && return 0
+    sleep 3
+  done
+  die "the Kubernetes API of '$CLUSTER_NAME' did not become ready."
+}
+
 require_cluster() {
   require_commands kubectl
   command kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT" ||
@@ -104,11 +131,37 @@ wordpress_mount_on_agent() {
   container_mount "k3d-${CLUSTER_NAME}-agent-$1" /var/lib/wordpress-shared
 }
 
-# Prints the load balancer's published HTTP bindings that are not on
-# 127.0.0.1. The lab must never be reachable from the network.
+# The load balancer's published site bindings, e.g. 127.0.0.1:8080.
+published_site_bindings() {
+  docker port "k3d-${CLUSTER_NAME}-serverlb" 80/tcp 2>/dev/null || true
+}
+
+# Prints the load balancer's published site and Kubernetes API bindings that
+# are not on 127.0.0.1. The lab must never be reachable from the network.
 published_beyond_localhost() {
-  docker port "k3d-${CLUSTER_NAME}-serverlb" 80/tcp 2>/dev/null |
-    grep -v '^127\.0\.0\.1:' || true
+  local port
+  for port in 80/tcp 6443/tcp; do
+    docker port "k3d-${CLUSTER_NAME}-serverlb" "$port" 2>/dev/null |
+      grep -v '^127\.0\.0\.1:' |
+      sed "s|^|$port -> |" || true
+  done
+}
+
+# Fails unless the load balancer publishes the site on SITE_PORT. After a
+# change to the SITE_URL port, WordPress would otherwise redirect every
+# request to a port that isn't published.
+require_site_port_published() {
+  local bindings
+  bindings="$(published_site_bindings)"
+  grep -q ":${SITE_PORT}\$" <<<"$bindings" && return 0
+  cat >&2 <<EOF
+ERROR: SITE_URL in k8s/bootstrap/site.env uses port $SITE_PORT, but the
+cluster publishes the site on: ${bindings:-<nothing>}
+A cluster's published ports can't change in place. Recreate it (data is
+kept):
+  ./stop.sh && ./start.sh
+EOF
+  exit 1
 }
 
 # Runs one SQL statement inside the MariaDB pod as the WordPress user and
@@ -129,6 +182,23 @@ mariadb_query() {
 
 print_job_logs() {
   kubectl logs -n "$NS" "job/$1" --all-containers=true --tail=200 >&2 || true
+}
+
+# Prints the logs of Job $1's successful pod. "kubectl logs job/NAME" picks a
+# pod itself, which can be an earlier failed attempt of a retried Job.
+job_logs() {
+  local pod
+  pod="$(
+    kubectl get pods -n "$NS" \
+      -l "batch.kubernetes.io/job-name=$1" \
+      --field-selector=status.phase=Succeeded \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+  )"
+  if [ -n "$pod" ]; then
+    kubectl logs -n "$NS" "$pod"
+  else
+    kubectl logs -n "$NS" "job/$1"
+  fi
 }
 
 # Waits until a Job completes. On failure or timeout, prints the latest
@@ -161,6 +231,17 @@ wait_for_job() {
   return 1
 }
 
+# Fails if k8s/secrets/ changed since the last ./start.sh. The WP-CLI Jobs
+# would otherwise create the new Secrets and use, say, a new database
+# password before MariaDB has been restarted with it.
+require_secrets_applied() {
+  local secret
+  for secret in $(kubectl apply -k "$ROOT_DIR/k8s/secrets" --dry-run=client -o name); do
+    kubectl get -n "$NS" "$secret" >/dev/null 2>&1 ||
+      die "k8s/secrets/ changed since the last ./start.sh. Run ./start.sh to apply it."
+  done
+}
+
 # Replaces the WP-CLI bootstrap Job and waits for it. A finished Job never
 # runs again, so it is recreated on every reconcile. Foreground deletion
 # makes sure an older bootstrap pod is gone before the new one starts.
@@ -173,7 +254,31 @@ run_bootstrap() {
   wait_for_job wordpress-bootstrap "$BOOTSTRAP_TIMEOUT"
   echo
   echo "Bootstrap result:"
-  kubectl logs -n "$NS" job/wordpress-bootstrap
+  job_logs wordpress-bootstrap
+}
+
+# Deletes generated ConfigMaps and Secrets that the manifests no longer
+# produce (superseded hash-named copies), plus the fixed-name Secrets of
+# older revisions. Run it after the rollouts, when no pod still uses them.
+prune_generated_objects() {
+  local current object dir
+  current="$(
+    for dir in mariadb wordpress bootstrap inventory; do
+      kubectl apply -k "$ROOT_DIR/k8s/$dir" --dry-run=client -o name
+    done | sort -u
+  )"
+  [ -n "$current" ] || die "could not list the generated objects to keep."
+
+  for object in $(
+    kubectl get configmaps,secrets -n "$NS" \
+      -l k3d-wordpress-ha-poc/generated=true -o name
+  ); do
+    grep -qxF "$object" <<<"$current" ||
+      kubectl delete -n "$NS" "$object" --ignore-not-found=true >/dev/null
+  done
+
+  kubectl delete secret -n "$NS" --ignore-not-found=true \
+    wordpress-database wordpress-keys wordpress-admin mariadb-root >/dev/null
 }
 
 # Requests the site once a second while a failure is in progress. Prints each
