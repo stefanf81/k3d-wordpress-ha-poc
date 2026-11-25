@@ -70,6 +70,12 @@ Every script talks to the lab through the `k3d-wordpress-ha-poc` kubectl
 context explicitly, so none of them can act on another cluster even if your
 current context points elsewhere.
 
+`./start.sh` makes the lab's context current, so plain `kubectl` commands
+reach the lab, and remembers the context you had before. `./stop.sh` switches
+back to it, unless you have chosen another context in the meantime.
+`./reset.sh` and the migration script keep the remembered context, because
+they recreate the cluster straight away.
+
 ## Architecture
 
 ```text

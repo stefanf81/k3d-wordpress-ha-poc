@@ -451,3 +451,66 @@ probe_site_during_failure() {
   fi
   echo "PASS: $((requests - failed)) of $requests requests succeeded during the disruption."
 }
+
+# --- kubectl context handover ------------------------------------------------
+# k3d.yaml switches the current kubectl context to the lab, so plain kubectl
+# commands reach it. start.sh saves the context that was current before, and
+# stop.sh switches back to it. The state file is keyed by cluster name. These
+# helpers read and change the kubeconfig itself, so they call the real kubectl,
+# not the --context wrapper above.
+context_state_file() {
+  printf '%s/k3d-wordpress-ha-poc/%s.previous-context\n' \
+    "${XDG_STATE_HOME:-$HOME/.local/state}" "$CLUSTER_NAME"
+}
+
+context_exists() {
+  command kubectl config get-contexts "$1" >/dev/null 2>&1
+}
+
+# Saves the current context unless it is the lab's own (a re-run of
+# start.sh must not overwrite the context saved the first time) or empty.
+remember_previous_context() {
+  local current file
+  current="$(command kubectl config current-context 2>/dev/null || true)"
+  [ -n "$current" ] && [ "$current" != "$KUBE_CONTEXT" ] || return 0
+  file="$(context_state_file)"
+  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
+  printf '%s\n' "$current" >"$file" 2>/dev/null || true
+}
+
+# Succeeds if the lab's context is the current kubectl context, or none is
+# (the cluster was deleted some other way). Check it before deleting the
+# cluster: when k3d deletes the current context, it makes some other
+# remaining context current, not necessarily the one from before.
+lab_context_is_current() {
+  local current
+  current="$(command kubectl config current-context 2>/dev/null || true)"
+  [ -z "$current" ] || [ "$current" = "$KUBE_CONTEXT" ]
+}
+
+# Switches back to the saved context if $1 is "yes", i.e. the lab's context
+# was still current before the cluster was deleted. Otherwise another context
+# was chosen after start.sh, and it is left alone.
+restore_previous_context() {
+  local file previous
+  command -v kubectl >/dev/null 2>&1 || return 0
+  file="$(context_state_file)"
+  [ -f "$file" ] || return 0
+  previous="$(head -n 1 "$file" 2>/dev/null || true)"
+  if [ -z "$previous" ] || [ "${1:-}" != yes ]; then
+    rm -f "$file"
+    return 0
+  fi
+  if ! context_exists "$previous"; then
+    echo "Previous kubectl context '$previous' no longer exists; leaving the current context unchanged." >&2
+    rm -f "$file"
+    return 0
+  fi
+  # The state is kept until the switch has worked, so a failure can be retried.
+  if command kubectl config use-context "$previous" >/dev/null; then
+    rm -f "$file"
+    echo "Restored kubectl context: $previous"
+  else
+    echo "Could not switch back to '$previous'; run: kubectl config use-context $previous" >&2
+  fi
+}

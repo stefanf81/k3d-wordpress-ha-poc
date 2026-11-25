@@ -41,6 +41,10 @@ create_wordpress_shared_volume() {
   echo "Imported. ./data/wordpress is no longer used and can be deleted."
 }
 
+# Capture the context that is current before k3d creates the cluster, or
+# this script, switches to the lab; stop.sh switches back to it.
+remember_previous_context
+
 if cluster_exists; then
   # A k3d node's Docker mounts and published ports cannot be changed in
   # place. Detect an older project revision that still mounted
