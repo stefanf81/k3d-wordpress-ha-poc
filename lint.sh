@@ -59,6 +59,37 @@ else
   echo "progressDeadlineSeconds $progress_deadline > BOOTSTRAP_TIMEOUT $bootstrap_timeout"
 fi
 
+section "Image pinning"
+# Every image carries a tag and a digest, so a recreated cluster runs the same
+# bits even when a tag such as php8.5-apache moves. References to the same
+# tag must agree on the digest, or two pods of the lab would run different
+# images.
+pinned='^[a-z0-9][a-z0-9./_-]*:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$'
+k3s_default="$(sed -n 's/^ *K3S_IMAGE="\${K3S_IMAGE:-\(.*\)}"$/\1/p' lib.sh)"
+images="$(
+  grep -rhE '^[[:space:]]*(- )?image:' k8s --include='*.yaml' |
+    sed -E 's/^[[:space:]]*(- )?image:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^"(.*)"$/\1/' || true
+)"
+if [ -z "$images" ] || [ -z "$k3s_default" ]; then
+  echo "could not read the images in k8s/ or the K3S_IMAGE default in lib.sh"
+  failed=1
+else
+  unpinned="$(printf '%s\n%s\n' "$images" "$k3s_default" | sort -u | grep -vE "$pinned" || true)"
+  if [ -n "$unpinned" ]; then
+    echo "not pinned as <name>:<tag>@sha256:<digest>:"
+    echo "  ${unpinned//$'\n'/$'\n'  }"
+    failed=1
+  fi
+  conflicting="$(sort -u <<<"$images" | sed 's/@.*//' | uniq -d)"
+  if [ -n "$conflicting" ]; then
+    echo "the same tag is pinned to different digests:"
+    echo "  ${conflicting//$'\n'/$'\n'  }"
+    failed=1
+  fi
+  [ -n "$unpinned$conflicting" ] ||
+    echo "$(sort -u <<<"$images" | wc -l | tr -d ' ') images and the k3s node image pinned by digest"
+fi
+
 section "PHP syntax"
 if have php; then
   for file in k8s/*/*.php; do

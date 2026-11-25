@@ -80,9 +80,12 @@ EOF
     fi
   done
 
-  # The node image is fixed when a cluster is created as well.
+  # The node image is fixed when a cluster is created as well. A cluster
+  # created before K3S_IMAGE carried a digest records the bare tag; the same
+  # tag counts as the same release.
   server_image="$(docker inspect "k3d-${CLUSTER_NAME}-server-0" --format '{{.Config.Image}}' 2>/dev/null || true)"
-  if [ -n "$server_image" ] && [ "$server_image" != "$K3S_IMAGE" ]; then
+  if [ -n "$server_image" ] && [ "$server_image" != "$K3S_IMAGE" ] &&
+    [ "$server_image" != "${K3S_IMAGE%@sha256:*}" ]; then
     echo "WARNING: this cluster runs $server_image, not $K3S_IMAGE." >&2
     echo "Recreate it with ./stop.sh && ./start.sh to switch (data is preserved)." >&2
   fi

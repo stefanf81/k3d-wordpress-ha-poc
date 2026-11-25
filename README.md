@@ -192,8 +192,8 @@ MARIADB_DATA_VOLUME=my-test-db ./start.sh      # use another database volume
 WORDPRESS_SHARED_VOLUME=my-test-wp ./start.sh  # use another WordPress volume
 ```
 
-k3s is pinned by default (`rancher/k3s:v1.36.2-k3s1`, set in `lib.sh`) so the
-Kubernetes runtime doesn't change underneath the lab. Use the same
+k3s is pinned by default (`rancher/k3s:v1.36.2-k3s1` plus its digest, set in
+`lib.sh`) so the Kubernetes runtime doesn't change underneath the lab. Use the same
 `MARIADB_DATA_VOLUME` and `WORDPRESS_SHARED_VOLUME` with every script when you
 override them.
 
@@ -500,8 +500,21 @@ sending new connections to a pod that already refuses them.
 
 Images use `imagePullPolicy: IfNotPresent`, so restarting or replacing a pod
 in a running cluster needs no registry access, and failover tests also work
-offline. Floating tags (`wordpress:php8.5-apache`, `wordpress:cli-php8.5`)
-are pulled fresh whenever the cluster is recreated (`./stop.sh && ./start.sh`);
+offline.
+
+Every image, including the k3s node image, is pinned by tag **and** digest
+(`wordpress:php8.5-apache@sha256:...`). The tag says what the image is; the
+digest makes sure a recreated cluster runs exactly the same bits, even for
+tags that move, such as `php8.5-apache`. The digests are multi-arch index
+digests, so amd64 and arm64 hosts both work. `./lint.sh` fails on an image
+without a digest, or on two references to the same tag with different
+digests. To update one, look up the new digest and replace it in every
+manifest that uses the image:
+
+```bash
+docker buildx imagetools inspect wordpress:php8.5-apache | sed -n 's/^Digest: *//p'
+```
+
 `./versions.sh` shows the image IDs actually in use.
 
 ## Security posture

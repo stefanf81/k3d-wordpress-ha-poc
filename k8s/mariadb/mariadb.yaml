@@ -29,7 +29,7 @@ spec:
       # k8s/secrets/ and re-running ./start.sh changes the real passwords.
       initContainers:
         - name: reconcile-credentials
-          image: mariadb:12.3.2
+          image: mariadb:12.3.2@sha256:a02fe89cb597d4375812b2eac90cf9d0775d4686daa7f7cc750ebbcad7525bbc
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -68,7 +68,7 @@ spec:
               readOnly: true
       containers:
         - name: mariadb
-          image: mariadb:12.3.2
+          image: mariadb:12.3.2@sha256:a02fe89cb597d4375812b2eac90cf9d0775d4686daa7f7cc750ebbcad7525bbc
           imagePullPolicy: IfNotPresent
           ports:
             - name: mysql

@@ -40,9 +40,10 @@
       ;;
   esac
 
-  # Pin the node runtime so k3s doesn't change underneath the lab. Override,
-  # e.g.: K3S_IMAGE=rancher/k3s:<version> ./start.sh
-  K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.36.2-k3s1}"
+  # Pin the node runtime by digest so k3s doesn't change underneath the lab.
+  # Like every image in k8s/, it carries tag and digest; lint.sh checks both.
+  # Override, e.g.: K3S_IMAGE=rancher/k3s:<version> ./start.sh
+  K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.36.2-k3s1@sha256:6a47cea22c4b834d4ba72c89d291696b79ebe406251f90b446e4dff03513dd87}"
   MARIADB_DATA_VOLUME="${MARIADB_DATA_VOLUME:-wordpress-ha-poc-mariadb-data}"
   WORDPRESS_SHARED_VOLUME="${WORDPRESS_SHARED_VOLUME:-wordpress-ha-poc-wordpress-shared}"
   # Where older revisions kept the shared tree and the MariaDB datadir as

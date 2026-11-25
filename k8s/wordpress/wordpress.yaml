@@ -51,7 +51,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: bootstrap-wordpress-files
-          image: wordpress:php8.5-apache
+          image: wordpress:php8.5-apache@sha256:05feeed1131c96103154f7a7a405a983a5b65a197b812f68cade590d3189d1de
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -64,7 +64,7 @@ spec:
               readOnly: true
       containers:
         - name: wordpress
-          image: wordpress:php8.5-apache
+          image: wordpress:php8.5-apache@sha256:05feeed1131c96103154f7a7a405a983a5b65a197b812f68cade590d3189d1de
           imagePullPolicy: IfNotPresent
           # The image entrypoint would generate its own wp-config.php; the
           # config is mounted below instead, so start Apache directly.
@@ -217,7 +217,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: wp-cron
-              image: curlimages/curl:8.16.0
+              image: curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh

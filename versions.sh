@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prints the tool, Kubernetes, image and application versions in use,
-# including the immutable image IDs behind floating tags.
+# including the image IDs the nodes actually run.
 set -euo pipefail
 
 # shellcheck source=lib.sh
