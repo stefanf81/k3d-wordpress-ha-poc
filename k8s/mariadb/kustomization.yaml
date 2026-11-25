@@ -7,10 +7,6 @@ resources:
   - ../secrets
   - mariadb.yaml
 
-generatorOptions:
-  labels:
-    k3d-wordpress-ha-poc/generated: "true"
-
 configMapGenerator:
   # Hash-named, so editing the script and re-running ./start.sh restarts
   # MariaDB with it.

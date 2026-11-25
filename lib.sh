@@ -257,24 +257,28 @@ run_bootstrap() {
   job_logs wordpress-bootstrap
 }
 
-# Deletes generated ConfigMaps and Secrets that the manifests no longer
-# produce (superseded hash-named copies), plus the fixed-name Secrets of
-# older revisions. Run it after the rollouts, when no pod still uses them.
+# Deletes ConfigMaps and Secrets that the manifests used to generate but no
+# longer do: superseded hash-named copies (same generator name, another
+# content hash), including those of older revisions, plus the fixed-name
+# Secrets that revisions before k8s/secrets/ applied. Run it after the
+# rollouts, when no pod uses them any more.
 prune_generated_objects() {
-  local current object dir
+  local current bases object base dir
   current="$(
     for dir in mariadb wordpress bootstrap inventory; do
       kubectl apply -k "$ROOT_DIR/k8s/$dir" --dry-run=client -o name
     done | sort -u
   )"
   [ -n "$current" ] || die "could not list the generated objects to keep."
+  # Kustomize appends "-" and a 10-character hash to a generated name.
+  bases="$(sed -nE 's#^((configmap|secret)/.+)-[a-z0-9]{10}$#\1#p' <<<"$current" | sort -u)"
 
-  for object in $(
-    kubectl get configmaps,secrets -n "$NS" \
-      -l k3d-wordpress-ha-poc/generated=true -o name
-  ); do
-    grep -qxF "$object" <<<"$current" ||
+  for object in $(kubectl get configmaps,secrets -n "$NS" -o name); do
+    grep -qxF "$object" <<<"$current" && continue
+    base="$(sed -nE 's#^(.+)-[a-z0-9]{10}$#\1#p' <<<"$object")"
+    if [ -n "$base" ] && grep -qxF "$base" <<<"$bases"; then
       kubectl delete -n "$NS" "$object" --ignore-not-found=true >/dev/null
+    fi
   done
 
   kubectl delete secret -n "$NS" --ignore-not-found=true \

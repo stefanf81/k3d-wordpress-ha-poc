@@ -8,12 +8,6 @@ resources:
   - ../wp-config
   - job.yaml
 
-# Generated objects are labelled so ./start.sh can delete superseded
-# hash-named copies.
-generatorOptions:
-  labels:
-    k3d-wordpress-ha-poc/generated: "true"
-
 # The Job is recreated on every ./start.sh and ./reconfigure.sh run, so
 # stable ConfigMap names are enough.
 configMapGenerator:

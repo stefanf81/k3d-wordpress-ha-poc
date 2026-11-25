@@ -30,7 +30,10 @@ spec:
       nodeSelector:
         workload: wordpress
       # One replica per worker: with three replicas and three workers,
-      # maxSkew 1 plus minDomains 3 forces a 1/1/1 placement.
+      # maxSkew 1 plus minDomains 3 forces a 1/1/1 placement. matchLabelKeys
+      # spreads each ReplicaSet revision on its own. Otherwise the old
+      # revision's pods count during a rolling update, and the new pods can
+      # end up two on one worker and none on another.
       topologySpreadConstraints:
         - maxSkew: 1
           minDomains: 3
@@ -39,6 +42,8 @@ spec:
           labelSelector:
             matchLabels:
               app: wordpress
+          matchLabelKeys:
+            - pod-template-hash
       securityContext:
         fsGroup: 33
         fsGroupChangePolicy: OnRootMismatch

@@ -96,7 +96,8 @@ The WordPress **web/application tier** is HA:
 
 - 3 k3d worker nodes, 3 WordPress replicas, one per worker
   (`topologySpreadConstraints` with `maxSkew: 1`, `minDomains: 3`,
-  `whenUnsatisfiable: DoNotSchedule`)
+  `whenUnsatisfiable: DoNotSchedule`, and `matchLabelKeys: [pod-template-hash]`
+  so a rolling update spreads the new pods on their own)
 - Kubernetes Service load balancing behind 3 Traefik replicas, one per worker
 - PodDisruptionBudgets with `minAvailable: 2` for WordPress and Traefik
 - a shared WordPress filesystem for core, plugins, themes and uploads
